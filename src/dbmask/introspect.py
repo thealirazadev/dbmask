@@ -17,7 +17,7 @@ from typing import Any, Final
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import ArgumentError, SQLAlchemyError
+from sqlalchemy.exc import ArgumentError
 
 from .errors import DbmaskError, ErrorCode
 from .logging import scrub_password, scrub_url
@@ -133,7 +133,9 @@ def database_name(url: str) -> str:
     """The database name in a connection URL, without connecting to it."""
     try:
         parsed = sa.engine.make_url(url)
-    except ArgumentError:
+    except (ArgumentError, ValueError):
+        # make_url raises a bare ValueError on a non-numeric port, which would otherwise
+        # surface as E_INTERNAL, exit 1, for what is a typo in a URL: a config error.
         raise DbmaskError(
             ErrorCode.E_CONFIG,
             "database URL is not a valid SQLAlchemy URL "
@@ -150,7 +152,12 @@ def connect(url: str) -> Engine:
         engine = sa.create_engine(url, pool_pre_ping=True, future=True)
         with engine.connect():
             pass
-    except (SQLAlchemyError, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001 - drivers raise their own types before SQLAlchemy
+        # Not every connect failure arrives as a SQLAlchemyError: PyMySQL raises
+        # AttributeError on an unknown charset and a missing driver raises
+        # ModuleNotFoundError, both before SQLAlchemy can wrap them. Letting those escape
+        # would report a connection problem as an internal error, so every failure of this
+        # call becomes E_CONNECT.
         # The driver message can embed the URL, so the password is scrubbed out of it and
         # the whole thing is collapsed to the single line the error contract allows.
         detail = " ".join(scrub_password(str(exc), url).split())
@@ -166,7 +173,7 @@ def introspect(engine: Engine) -> SchemaModel:
         inspector = sa.inspect(engine)
         names = sorted(name for name in inspector.get_table_names() if name not in OWNED_TABLES)
         tables = {name: _table(inspector, name) for name in names}
-    except SQLAlchemyError as exc:
+    except Exception as exc:  # noqa: BLE001 - same reason as connect(); only the class is kept
         raise DbmaskError(
             ErrorCode.E_CONNECT,
             f"schema introspection failed on {scrub_url(str(engine.url))}: {type(exc).__name__}",

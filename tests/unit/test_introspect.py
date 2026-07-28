@@ -10,6 +10,7 @@ from dbmask.introspect import (
     OWNED_TABLES,
     PII_PATTERNS,
     TEXT_FAMILY,
+    connect,
     database_name,
     match_pii,
     type_family,
@@ -102,6 +103,33 @@ def test_database_name_rejects_an_unparseable_url() -> None:
     with pytest.raises(DbmaskError) as caught:
         database_name("not a url at all")
     assert caught.value.code is ErrorCode.E_CONFIG
+
+
+def test_database_name_rejects_a_non_numeric_port_as_a_config_error() -> None:
+    # make_url raises a bare ValueError here, which used to escape as E_INTERNAL, exit 1.
+    with pytest.raises(DbmaskError) as caught:
+        database_name("postgresql+psycopg://app:s3cr3t@localhost:notaport/app_staging")
+    assert caught.value.code is ErrorCode.E_CONFIG
+    assert "s3cr3t" not in caught.value.message
+
+
+def test_connect_maps_a_driver_failure_that_is_not_a_sqlalchemy_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PyMySQL raises AttributeError on an unknown charset; a missing driver raises
+    ModuleNotFoundError. Neither is a SQLAlchemyError, and both must still be E_CONNECT."""
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise AttributeError("'NoneType' object has no attribute 'encoding'")
+
+    monkeypatch.setattr(sa, "create_engine", boom)
+    with pytest.raises(DbmaskError) as caught:
+        connect("mysql+pymysql://app:s3cr3t@localhost:3306/app_staging?charset=bogus")
+    assert caught.value.code is ErrorCode.E_CONNECT
+    assert "cannot connect to mysql+pymysql://app:***@localhost:3306/app_staging" in (
+        caught.value.message
+    )
+    assert "s3cr3t" not in caught.value.message
 
 
 def test_dbmask_owned_tables_are_named_so_they_never_read_as_drift() -> None:
