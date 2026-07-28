@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from collections import OrderedDict
 from collections.abc import Mapping
 from typing import Final
 
 from faker import Faker
 
 from .config import (
+    DEFAULT_CACHE_SIZE,
     DEFAULT_LOCALE,
     PLACEHOLDER_PATTERN,
     ColumnRule,
@@ -29,6 +31,17 @@ from .errors import DbmaskError, ErrorCode
 FAKE_FAMILIES: Final = ("fake_email", "fake_name", "fake_phone", "fake_address")
 
 HASH_LENGTH: Final = 64
+
+# 12 hex chars = 48 bits from the same HMAC digest, so the suffix is deterministic and
+# needs no in-memory seen-set (tables larger than RAM must work). Below roughly 16M
+# distinct values the birthday probability is negligible, and a residual collision is not
+# tolerated silently: the unique index rejects it and the verify pass re-checks.
+UNIQUE_SUFFIX_LENGTH: Final = 12
+UNIQUE_SEPARATOR: Final = "-"
+UNIQUE_SUFFIX_COST: Final = UNIQUE_SUFFIX_LENGTH + len(UNIQUE_SEPARATOR)
+
+_SUFFIX_OFFSET: Final = 8
+_SUFFIX_BYTES: Final = UNIQUE_SUFFIX_LENGTH // 2
 
 # Declared per-strategy output ceilings, used by the length budget in `check`. None means
 # the ceiling depends on config (redact) or on row data (template), or that the strategy
@@ -53,8 +66,21 @@ _SEED_BYTES: Final = 8
 def max_output_length(rule: ColumnRule) -> int | None:
     """Longest value the rule can produce, or None when it cannot be bounded statically."""
     if rule.strategy == "redact":
-        return len(rule.value) if rule.value is not None else None
-    return MAX_OUTPUT_LENGTH[rule.strategy]
+        base = len(rule.value) if rule.value is not None else None
+    else:
+        base = MAX_OUTPUT_LENGTH[rule.strategy]
+    if base is None:
+        return None
+    return base + UNIQUE_SUFFIX_COST if rule.unique else base
+
+
+def apply_unique_suffix(value: str, digest: bytes) -> str:
+    """Insert the deterministic suffix before `@` for emails, append it otherwise."""
+    suffix = digest[_SUFFIX_OFFSET : _SUFFIX_OFFSET + _SUFFIX_BYTES].hex()
+    local, at, domain = value.rpartition("@")
+    if at:
+        return f"{local}{UNIQUE_SEPARATOR}{suffix}@{domain}"
+    return f"{value}{UNIQUE_SEPARATOR}{suffix}"
 
 
 def normalize(family: str, value: str) -> str:
@@ -71,19 +97,48 @@ def normalize(family: str, value: str) -> str:
 class StrategyEngine:
     """Applies column rules to values. Constructed once per run, used by both runners."""
 
-    def __init__(self, secret: str, locale: str = DEFAULT_LOCALE) -> None:
+    def __init__(
+        self, secret: str, locale: str = DEFAULT_LOCALE, cache_size: int = DEFAULT_CACHE_SIZE
+    ) -> None:
         # The secret is never held as an attribute and never interpolated: only a keyed
         # HMAC object, copied per value, so no repr of this engine can leak it.
         self._mac = hmac.new(secret.encode("utf-8"), digestmod=hashlib.sha256)
         self._faker = Faker(locale)
         self.locale = locale
+        # Production data repeats heavily (one address appears in many rows), so the cache
+        # makes CPU cost proportional to distinct values rather than to rows. It only ever
+        # holds generated values, keyed by family and normalized input.
+        self._cache: OrderedDict[tuple[str, str], str] = OrderedDict()
+        self._cache_size = max(cache_size, 0)
+        self.hits = 0
+        self.misses = 0
+
+    @property
+    def cache_hit_rate(self) -> float:
+        lookups = self.hits + self.misses
+        return self.hits / lookups if lookups else 0.0
 
     def _digest(self, family: str, normalized: str) -> bytes:
         mac = self._mac.copy()
         mac.update(family.encode("utf-8") + _FAMILY_SEPARATOR + normalized.encode("utf-8"))
         return mac.digest()
 
-    def _generate(self, family: str, seed: int) -> str:
+    def _generate(self, family: str, normalized: str, digest: bytes) -> str:
+        key = (family, normalized)
+        cached = self._cache.get(key)
+        if cached is not None:
+            self.hits += 1
+            self._cache.move_to_end(key)
+            return cached
+        self.misses += 1
+        generated = self._call_provider(family, int.from_bytes(digest[:_SEED_BYTES], "big"))
+        if self._cache_size:
+            self._cache[key] = generated
+            while len(self._cache) > self._cache_size:
+                self._cache.popitem(last=False)
+        return generated
+
+    def _call_provider(self, family: str, seed: int) -> str:
         self._faker.seed_instance(seed)
         if family == "fake_email":
             return self._faker.email()
@@ -127,7 +182,9 @@ class StrategyEngine:
         normalized = normalize(rule.strategy, text)
         digest = self._digest(rule.strategy, normalized)
         if rule.strategy == "redact":
-            return rule.value if rule.value is not None else ""
-        if rule.strategy == "hash":
-            return digest.hex()
-        return self._generate(rule.strategy, int.from_bytes(digest[:_SEED_BYTES], "big"))
+            masked = rule.value if rule.value is not None else ""
+        elif rule.strategy == "hash":
+            masked = digest.hex()
+        else:
+            masked = self._generate(rule.strategy, normalized, digest)
+        return apply_unique_suffix(masked, digest) if rule.unique else masked
