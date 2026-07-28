@@ -30,6 +30,21 @@ def scrub_url(url: str) -> str:
     return urlunsplit((parts.scheme, userinfo + host, parts.path, parts.query, parts.fragment))
 
 
+def scrub_password(text: str, url: str) -> str:
+    """Return text with the password from url replaced by ***.
+
+    Driver messages often echo the connection string, so any message derived from a
+    driver goes through here before it can reach stderr.
+    """
+    try:
+        password = urlsplit(url).password
+    except ValueError:
+        return text
+    if not password:
+        return text
+    return text.replace(password, _PASSWORD_MASK)
+
+
 def _render(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
