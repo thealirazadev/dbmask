@@ -16,7 +16,9 @@ import click
 
 from . import __version__
 from .config import DEFAULT_CONFIG_NAME, MaskPlan, load_plan
+from .emit import render_config, write_config
 from .errors import EXIT_CONFIG, EXIT_OK, EXIT_RUNTIME, DbmaskError, ErrorCode
+from .introspect import SchemaModel, connect, introspect
 from .logging import log_event
 
 SECRET_ENV: Final = "DBMASK_SECRET"
@@ -58,6 +60,22 @@ def _not_implemented(command: str, phase: int) -> None:
     )
 
 
+def read_schema(url: str) -> SchemaModel:
+    """Connect, introspect, and always release the connection. Reads no row data."""
+    engine = connect(url)
+    try:
+        schema = introspect(engine)
+    finally:
+        engine.dispose()
+    if not schema.tables:
+        raise DbmaskError(
+            ErrorCode.E_CONFIG,
+            f'database "{schema.database}" has no tables; check the URL points at a '
+            "restored copy",
+        )
+    return schema
+
+
 @click.group(context_settings=_CONTEXT_SETTINGS)
 @click.option(
     "--config",
@@ -91,8 +109,19 @@ def cli(ctx: click.Context, config_path: Path) -> None:
 @click.option("--force", is_flag=True, help="Overwrite an existing output file.")
 def init(url: str | None, output: Path, force: bool) -> None:
     """Write a starter dbmask.toml from the live schema at --url. Writes no database."""
-    require_url(url, "DBMASK_URL", "--url")
-    _not_implemented("init", 2)
+    schema = read_schema(require_url(url, "DBMASK_URL", "--url"))
+    flagged = len(schema.pii_columns())
+    write_config(output, render_config(schema), force)
+    log_event(
+        "init.completed",
+        dialect=schema.dialect,
+        tables=len(schema.tables),
+        columns=len(schema.columns()),
+        pii=flagged,
+    )
+    click.echo(f"introspected {len(schema.tables)} tables, {len(schema.columns())} columns")
+    click.echo(f"flagged {flagged} pii columns by name pattern")
+    click.echo(f"wrote {output} (review every entry before first mask)")
 
 
 @cli.command()
