@@ -14,18 +14,37 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
   black 26.5.1, mypy 2.3.0) with `uv.lock` committed. Modules landed: `errors.py`, `logging.py`,
   `config.py`, `strategies.py`, `cli.py`. 81 unit tests, no database and no network.
 
+- 2026-07-29 - Phase 2 complete: introspection, drift and compatibility findings, the starter
+  config emitter, `init`, `check`, and the dockerized two-dialect test bed. Seven commits as
+  listed in `docs/phases.md`. New modules: `introspect.py`, `drift.py`, `emit.py`; `cli.py` now
+  implements `init` and `check`; `logging.py` gained `scrub_password`. `docker-compose.test.yml`
+  runs postgres:16 and mysql:8.4; `tests/conftest.py` owns the seeded fixture schema (users,
+  addresses, orders, order_items with FKs, a unique email index, a composite PK, PII-named
+  columns and sentinel rows) and the unit-test schema builders. 206 tests: 160 unit (no database,
+  no network) and 46 integration, each running once per dialect.
+
 ## Project status
 
-- Phase 1 done and verified locally; awaiting owner approval before Phase 2 (introspection,
-  init, check, docker test bed). Verified on 2026-07-28: `ruff check .`, `black --check .`,
-  `mypy --strict src`, and `pytest -q` (81 passed) all clean; `dbmask --help` lists the five
-  commands; `dbmask mask` without a config exits 2 with one `error[E_CONFIG]` line; a missing or
-  short `DBMASK_SECRET` exits 2 without echoing the value. Nothing is unverified in Phase 1: no
-  database container was needed, since no Phase 1 code touches a database.
-- Known follow-up for Phase 2: `MAX_OUTPUT_LENGTH` ceilings (email 64, name 64, phone 32,
-  address 128) are the length budget `check` will use. Measured maxima over 3000 seeds today were
-  32/27/22/64, so the ceilings hold with headroom, and the unit test fails if a Faker bump widens
-  output past them.
+- Phase 2 done and verified locally on 2026-07-29; awaiting owner approval before Phase 3
+  (in-place mask). Observed on that date, on this machine, with both containers healthy:
+  `ruff check .`, `black --check .`, `mypy --strict src` clean; `pytest -q` 206 passed;
+  `pytest -m integration` 46 passed across postgresql and mysql; with unreachable URLs all 46
+  skip naming the compose command. `dbmask init` against the fixture emits 25 columns over 4
+  tables with 11 pii comments and that file passes `dbmask check` unedited (exit 0) on both
+  dialects; re-running `init` without `--force` exits 2 and leaves the file untouched. Dropping
+  the `users.email` entry exits 3 with `finding[pii-drift]`, dropping `users.age` exits 3 with
+  the plain drift message, a stale `users.legacy_id` entry exits 3, a database name outside the
+  safety pattern exits 4 before connecting, and a wrong password exits 1 with the password
+  scrubbed to `***`. All six compatibility findings plus the no-primary-key and FK-cycle findings
+  fire against live schemas. Nothing in Phase 2 is unverified.
+- Phase 1 verification (2026-07-28) still holds: `dbmask --help` lists the five commands;
+  `dbmask mask` without a config exits 2 with one `error[E_CONFIG]` line; a missing or short
+  `DBMASK_SECRET` exits 2 without echoing the value.
+- `MAX_OUTPUT_LENGTH` ceilings (email 64, name 64, phone 32, address 128) are now the live length
+  budget `check` uses. Measured maxima over 3000 seeds on 2026-07-28 were 32/27/22/64, so the
+  ceilings hold with headroom, and the unit test fails if a Faker bump widens output past them.
+- Open for Phase 3: `mask`, `pump` and `verify` still exit with the "not implemented" message.
+  `dialects.py`, `audit.py`, `runner_mask.py`, `report.py` and `verify.py` do not exist yet.
 
 ## Decisions log
 
@@ -69,6 +88,48 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
   settings, resolved column rules, sorted join pairs), not the file bytes. Reformatting or
   re-commenting `dbmask.toml` must not block a `--resume`, while any change to what happens to a
   column must. Join order is semantically irrelevant, so it is sorted out of the hash.
+- 2026-07-29 - `connect()` and `database_name()` live in `introspect.py`, not in a new module.
+  `introspect.py` is already the one Phase 2 module that talks to a live database, and the
+  directory layout in `docs/architecture.md` has no slot for a connection helper; `dialects.py`
+  is reserved for the dialect-specific SQL (COPY, advisory locks, read-only session) that lands
+  in Phase 3 and 4. Adding a module would have meant changing the architecture doc.
+- 2026-07-29 - `check` evaluates `safety.database_name_pattern` from the URL before it opens a
+  connection, although `docs/architecture.md` lists safety as step 5 of check. If the operator
+  pointed at production, dbmask must not authenticate to it, read its catalog, or print its
+  column names. The check needs only the URL, so doing it first costs nothing. A missing pattern
+  is `E_CONFIG` (exit 2: edit the config); a mismatch is `E_SAFETY` (exit 4: stop and think about
+  the database you pointed at), which is the 3/4 split `docs/design.md` argues for.
+- 2026-07-29 - `find_findings` takes a mode (`mask`, `pump`, `all`) and `check` passes `all`, so
+  one `check` reports both the mask-only "no primary key" finding and the pump-only FK-cycle
+  finding, as the Phase 2 checklist requires. The parameter exists so the Phase 3 and 4
+  preflights can pass their own mode: an FK cycle is harmless for an in-place mask and must not
+  block it, and a table without a primary key is fine for pump.
+- 2026-07-29 - `introspect` skips `dbmask_audit` and `dbmask_progress` (`OWNED_TABLES`). They are
+  dbmask's own bookkeeping in the masked database, not the operator's schema. Without the skip,
+  the first `mask` run would make every later `check` fail as drift on tables the operator never
+  wrote and cannot sensibly configure.
+- 2026-07-29 - A live table missing from the config produces one table-level `drift` finding plus
+  one `pii-drift` finding per PII-named column in it, rather than one line per column. A 60-column
+  table would otherwise bury the output, and deny-by-default still has to stay visible per column
+  for the PII ones.
+- 2026-07-29 - `init` picks a strategy by walking a fallback chain: the pattern's proposal, then
+  `redact = "MASKED"`, then `keep` with a TODO comment, taking the first whose worst-case output
+  fits the column length. This is what makes "init output passes check unedited" true. The visible
+  cost is that short address-ish columns (`city varchar(80)`, `postal_code varchar(20)`) come out
+  as `redact`, with a comment naming the strategy that did not fit.
+- 2026-07-29 - `init` proposes `fake_name` for `file_name`, where the excerpt in
+  `docs/api-contracts.md` shows `keep`. init cannot tell a person's name from a file's, and PRD
+  goal 4 makes PII-named columns deny-by-default, so a flagged column always gets a masking
+  strategy and the operator downgrades it to `keep` during review. `docs/api-contracts.md` is left
+  unchanged pending an owner call on that one illustrative line.
+- 2026-07-29 - Cycle detection treats a self-referencing table as a cycle. Pump inserts a table's
+  rows in primary key order, which does not guarantee a parent row precedes its child inside one
+  table either, so refusing is honest rather than optimistic. Cyclic FK support is already a
+  backlog item in `docs/phases.md`.
+- 2026-07-29 - `tests/` gained `__init__.py` files. Without them pytest imports `conftest.py` as a
+  top-level `conftest` module and a second time as `tests.conftest` when a test imports the shared
+  sentinel constants and schema builders, which would give the fixture and the test two different
+  `MetaData` objects.
 - 2026-07-27 - PK and FK columns are restricted to `keep` in v1 and `check` enforces it.
   Deterministic key translation is feasible (the same HMAC machinery would preserve joins) but
   it drags in FK-aware update ordering, cascade interactions, and sequence/autoincrement
