@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from dbmask.errors import EXIT_CODES, DbmaskError, ErrorCode
-from dbmask.logging import log_event, scrub_url
+from dbmask.logging import log_event, scrub_password, scrub_url
 
 EXPECTED_EXIT_CODES = {
     ErrorCode.E_CONFIG: 2,
@@ -52,6 +52,26 @@ def test_scrub_url_removes_the_password(url: str, expected: str | None) -> None:
 
 def test_scrub_url_hides_everything_when_the_url_is_unparseable() -> None:
     assert scrub_url("postgresql://app:s3cr3t@[::1:5432/app") == "***"
+
+
+def test_scrub_password_replaces_the_plain_spelling() -> None:
+    url = "postgresql+psycopg://app:s3cr3t@db.internal:5432/app_staging"
+    assert scrub_password('dsn "user=app password=s3cr3t"', url) == 'dsn "user=app password=***"'
+
+
+def test_scrub_password_replaces_the_decoded_spelling_the_driver_receives() -> None:
+    # A password with URL-reserved characters is percent-encoded in the URL, but the
+    # driver is handed (and echoes) the decoded form.
+    url = "mysql+pymysql://app:s3%40cr3t%2Fx@db.internal:3306/app_staging"
+    scrubbed = scrub_password('Access denied: dsn "password=s3@cr3t/x"', url)
+    assert "s3@cr3t/x" not in scrubbed
+    assert scrubbed == 'Access denied: dsn "password=***"'
+
+
+def test_scrub_password_leaves_text_alone_when_the_url_carries_no_password() -> None:
+    assert scrub_password("nothing to hide", "postgresql+psycopg://localhost/app") == (
+        "nothing to hide"
+    )
 
 
 def test_log_event_writes_one_logfmt_line(capsys: pytest.CaptureFixture[str]) -> None:

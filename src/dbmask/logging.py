@@ -9,7 +9,7 @@ ever logged through scrub_url, which replaces the password with ***.
 from __future__ import annotations
 
 import sys
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 _NEEDS_QUOTING = set(' "=\n\t')
 
@@ -35,6 +35,10 @@ def scrub_password(text: str, url: str) -> str:
 
     Driver messages often echo the connection string, so any message derived from a
     driver goes through here before it can reach stderr.
+
+    Both spellings of the password are replaced. A password containing URL-reserved
+    characters is percent-encoded in the URL, but the driver is handed the decoded form
+    and echoes that one, so replacing only the encoded spelling would leak it verbatim.
     """
     try:
         password = urlsplit(url).password
@@ -42,7 +46,11 @@ def scrub_password(text: str, url: str) -> str:
         return text
     if not password:
         return text
-    return text.replace(password, _PASSWORD_MASK)
+    scrubbed = text.replace(password, _PASSWORD_MASK)
+    decoded = unquote(password)
+    if decoded and decoded != password:
+        scrubbed = scrubbed.replace(decoded, _PASSWORD_MASK)
+    return scrubbed
 
 
 def _render(value: object) -> str:
