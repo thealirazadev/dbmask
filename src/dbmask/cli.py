@@ -8,6 +8,7 @@ machines. Its value is never echoed, logged, or included in an error message.
 from __future__ import annotations
 
 import os
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -15,10 +16,11 @@ from typing import Final
 import click
 
 from . import __version__
-from .config import DEFAULT_CONFIG_NAME, MaskPlan, load_plan
+from .config import DEFAULT_CONFIG_NAME, STRATEGY_NAMES, ColumnRule, MaskPlan, load_plan
+from .drift import check_database_name, find_findings, format_findings, pii_count
 from .emit import render_config, write_config
 from .errors import EXIT_CONFIG, EXIT_OK, EXIT_RUNTIME, DbmaskError, ErrorCode
-from .introspect import SchemaModel, connect, introspect
+from .introspect import SchemaModel, connect, database_name, introspect
 from .logging import log_event
 
 SECRET_ENV: Final = "DBMASK_SECRET"
@@ -129,10 +131,37 @@ def init(url: str | None, output: Path, force: bool) -> None:
 @click.pass_context
 def check(ctx: click.Context, url: str | None) -> None:
     """Validate the config against the live schema at --url. Reads only, writes nothing."""
-    _plan(ctx)
+    plan = _plan(ctx)
     load_secret()
-    require_url(url, "DBMASK_URL", "--url")
-    _not_implemented("check", 2)
+    resolved = require_url(url, "DBMASK_URL", "--url")
+    # The safety pattern is evaluated from the URL before a connection is opened: if the
+    # operator pointed at production, dbmask must not even log in, let alone read its
+    # catalog and print its column names.
+    check_database_name(plan, database_name(resolved))
+    schema = read_schema(resolved)
+
+    findings = find_findings(plan, schema)
+    if findings:
+        for line in format_findings(findings):
+            click.echo(line)
+        pii = pii_count(findings)
+        log_event("check.finding", findings=len(findings), pii=pii)
+        noun = "finding" if len(findings) == 1 else "findings"
+        raise DbmaskError(
+            ErrorCode.E_DRIFT,
+            f"{len(findings)} {noun} ({pii} pii). fix {plan.path.name} and re-run check.",
+        )
+
+    rules = plan.rules()
+    click.echo(f"dbmask check against {schema.dialect}://{schema.database}")
+    click.echo(f"  {len(rules)} columns configured across {len(plan.tables)} tables")
+    click.echo(f"  strategies: {_strategy_summary(rules)}")
+    click.echo("  drift: none. compatibility: ok. safety pattern: matched.")
+
+
+def _strategy_summary(rules: Sequence[ColumnRule]) -> str:
+    counts = Counter(rule.strategy for rule in rules)
+    return ", ".join(f"{name} {counts[name]}" for name in STRATEGY_NAMES if counts[name])
 
 
 @cli.command()
