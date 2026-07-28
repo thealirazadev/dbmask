@@ -23,6 +23,42 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
   columns and sentinel rows) and the unit-test schema builders. 206 tests: 160 unit (no database,
   no network) and 46 integration, each running once per dialect.
 
+- 2026-07-29 - Phase 2 functional review: five defects found and fixed, one commit each. Every
+  fix has a test that was observed failing on the pre-fix source and passing after it. The suite
+  went from 206 to 224 tests, all green with both containers up.
+  1. `fix: map non sqlalchemy connect failures to e_connect`. `connect()` caught only
+     `SQLAlchemyError` and `OSError`, but drivers fail before SQLAlchemy can wrap them: PyMySQL
+     raises a bare `AttributeError` on an unknown charset (reproduced against the live MySQL
+     container) and a missing driver raises `ModuleNotFoundError`. A connection problem was
+     reported as `error[E_INTERNAL]: unexpected AttributeError`. In the same class of bug,
+     `make_url` raises a bare `ValueError` on a non-numeric port, so a typo in a URL exited 1
+     instead of the documented 2. Both now map to their contract codes.
+  2. `fix: scrub the decoded password from driver messages`. `scrub_password` replaced only the
+     percent-encoded spelling taken from the URL, but the driver is handed the decoded password
+     and echoes that one, so any password containing URL-reserved characters (`@`, `/`, `:`)
+     would have passed through into the `E_CONNECT` message. Both spellings are replaced now.
+  3. `fix: tie expression unique indexes to their columns`. A unique index over an expression
+     (`UNIQUE (lower(email))`) reports `column_names = [None]` on PostgreSQL, which the model
+     turned into a column literally named "None". Two consequences: garbage in the schema model,
+     and a masked column under such an index was never told it needs `unique = true`, so `check`
+     passed and the run would have collided mid-write (Faker's address pool is small, so
+     duplicate fake emails are near certain at scale). `UniqueIndexInfo` now keeps the expression
+     text and matches column names inside it on a word boundary.
+  4. `fix: write the starter config atomically`. `init --force` truncated the operator's reviewed
+     config and wrote in place, so a full disk or a kill halfway through left a half-written file
+     that still parses as TOML with the columns below the cut silently gone. The write now goes
+     to a temporary file in the same directory and is renamed over the target.
+  5. `fix: check verify join pairs before a run writes`. `[[verify.joins]]` was never diffed
+     against the schema or against the plan, and the pair in the `docs/architecture.md` example
+     is broken as written: `users.email` carries `unique = true` (it has a unique index) and
+     `orders.customer_email` does not, so the unique suffix is appended to one side only and the
+     two columns no longer share a fake address. Confirmed directly against the engine:
+     `summersbenjamin-9c69da58c6df@example.com` versus `summersbenjamin@example.com`. That is the
+     PRD's headline join-preservation promise failing, and it was only discoverable after a run
+     had rewritten every row. `check` now reports a stale join reference as drift and a pair whose
+     two sides do not carry an identical rule as a compatibility finding; setting `unique = true`
+     on both sides is the fix and is asserted end to end on both dialects.
+
 ## Project status
 
 - Phase 2 done and verified locally on 2026-07-29; awaiting owner approval before Phase 3
@@ -45,6 +81,17 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
   ceilings hold with headroom, and the unit test fails if a Faker bump widens output past them.
 - Open for Phase 3: `mask`, `pump` and `verify` still exit with the "not implemented" message.
   `dialects.py`, `audit.py`, `runner_mask.py`, `report.py` and `verify.py` do not exist yet.
+- Post-review state, observed on 2026-07-29 on this machine with both containers healthy:
+  `ruff check .`, `black --check .`, `mypy --strict src` clean; `pytest -q` 224 passed (163 unit,
+  61 integration, each integration test once per dialect). Manual CLI run against the live
+  PostgreSQL fixture: `init` exit 0 (4 tables, 25 columns, 11 pii), `check` on that file exit 0,
+  `init` again exit 2, a URL with a non-numeric port exit 2, and a MySQL URL with a bogus charset
+  exit 1 with `error[E_CONNECT]` and the password shown as `***`. Nothing in this review is
+  unverified.
+- Known limitation recorded during the review: on MySQL, SQLAlchemy 2.0.51 reports a functional
+  unique index with neither column names nor expression text, so dbmask cannot tie it to a
+  column. PostgreSQL is covered by the expression match. The integration test asserts only what
+  holds on both dialects, that no unique index reports a column the table does not have.
 
 ## Decisions log
 
@@ -135,3 +182,20 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
   it drags in FK-aware update ordering, cascade interactions, and sequence/autoincrement
   reseeding; it is backlogged as its own phase rather than half-shipped. Logical joins on
   non-key columns (the users.email/orders.customer_email case) already work via determinism.
+- 2026-07-29 - A join pair is validated on the whole rule, not just the strategy name. Two
+  columns mask alike only when strategy, `value`, `template` and `unique` all agree, because the
+  unique suffix is part of the output. Comparing strategy names alone would have passed the
+  broken pair in the architecture example. Missing join references are `drift` (the schema moved)
+  and mismatched rules are `compat` (the config is internally inconsistent), which keeps the
+  existing severity meanings intact.
+- 2026-07-29 - Coverage of an expression unique index is decided by looking for the column name
+  inside the expression text, on a word boundary. It over-matches rather than under-matches by
+  design: an unnecessary `unique = true` costs an extra 13 characters of output, while a missed
+  one is a unique violation partway through a destructive run.
+- 2026-07-29 - Two review findings are left for the owner rather than changed unilaterally, both
+  logged in the `docs/phases.md` backlog. `docs/architecture.md` says `hash` truncates to the
+  column length, but `strategies.py` returns the full 64-char digest and `check` reports a
+  shorter column as incompatible; changing either side changes masked output or the architecture
+  doc, so it needs a call. And `init` anchors `safety.database_name_pattern` to the database it
+  introspected when the default staging pattern does not match, which means a config generated
+  against production would permit masking production.

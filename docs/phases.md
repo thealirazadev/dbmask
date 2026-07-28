@@ -226,3 +226,16 @@ real install/run examples and the privacy statement.
 - Cyclic FK support via deferred constraints on PostgreSQL; rejected at check in v1.
 - Parallel table workers; single-writer simplicity wins until throughput data says otherwise.
 - Optional index drop/recreate around large in-place runs; destructive, operator-owned for now.
+- Decide whether `hash` truncates to the column length. `docs/architecture.md` says it does;
+  `strategies.py` returns the full 64-char digest and `check` reports a shorter column as
+  incompatible instead. Truncating changes masked output for existing configs, so it is an owner
+  call between amending the architecture doc and changing the strategy.
+- Decide what `init` should emit for `safety.database_name_pattern` when the introspected
+  database name does not match the default `_(staging|masked)$`. Today it anchors the pattern to
+  that database name, so a config generated against production would let `mask` run against
+  production. Options: emit the anchored pattern with an explicit warning comment, emit no
+  pattern and let `check` demand one, or refuse. Each changes the "init output passes check
+  unedited" property, so it needs a call rather than a quiet fix.
+- MySQL functional unique indexes cannot be tied to a column: SQLAlchemy reports neither column
+  names nor expression text for them, so `check` cannot demand `unique = true` there. PostgreSQL
+  is covered.
