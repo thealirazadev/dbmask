@@ -149,3 +149,26 @@ def test_write_config_refuses_to_overwrite_without_force(tmp_path: Path) -> None
     assert path.read_text(encoding="utf-8") == "x"
     write_config(path, "y", force=True)
     assert path.read_text(encoding="utf-8") == "y"
+
+
+def test_a_failed_overwrite_leaves_the_reviewed_config_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A disk that fills up halfway through --force must not shred the reviewed config."""
+    path = tmp_path / "dbmask.toml"
+    reviewed = '[tables.users.columns]\nemail = "fake_email"\n'
+    path.write_text(reviewed, encoding="utf-8")
+    real_write_text = Path.write_text
+
+    def half_a_write(self: Path, data: str, **kwargs: object) -> int:
+        real_write_text(self, data[: len(data) // 2], encoding="utf-8")
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", half_a_write)
+    with pytest.raises(DbmaskError) as caught:
+        write_config(path, "# regenerated\n" * 40, force=True)
+
+    monkeypatch.undo()
+    assert caught.value.code is ErrorCode.E_CONFIG
+    assert path.read_text(encoding="utf-8") == reviewed
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["dbmask.toml"]

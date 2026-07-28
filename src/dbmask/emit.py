@@ -13,6 +13,7 @@ negative costs real PII in staging.
 from __future__ import annotations
 
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -161,15 +162,25 @@ def _string(value: str) -> str:
 
 
 def write_config(path: Path, text: str, force: bool) -> None:
-    """Write the starter config, refusing to overwrite a reviewed file without --force."""
+    """Write the starter config, refusing to overwrite a reviewed file without --force.
+
+    The write is atomic: a temporary file in the same directory is renamed over the
+    target. Writing in place would truncate the operator's reviewed config first, so a
+    full disk or a kill halfway through would leave a half-written file that still parses
+    as TOML, silently dropping the columns below the cut.
+    """
     if path.exists() and not force:
         raise DbmaskError(
             ErrorCode.E_CONFIG,
             f'"{path}" already exists; pass --force to overwrite it or choose another -o path',
         )
+    temporary = path.with_name(f".{path.name}.dbmask-tmp")
     try:
-        path.write_text(text, encoding="utf-8")
+        temporary.write_text(text, encoding="utf-8")
+        temporary.replace(path)
     except OSError as exc:
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)
         raise DbmaskError(
             ErrorCode.E_CONFIG, f'cannot write "{path}": {type(exc).__name__}'
         ) from None
