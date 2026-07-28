@@ -98,6 +98,20 @@ class ForeignKeyInfo:
 class UniqueIndexInfo:
     name: str
     columns: tuple[str, ...]
+    expressions: tuple[str, ...] = ()
+
+    def covers(self, column: str) -> bool:
+        """Whether masking this column has to satisfy this index.
+
+        An expression index (`UNIQUE (lower(email))`) names no column in the catalog, so
+        the column name is looked for inside the expression text instead. Over-matching is
+        the safe direction: it asks for a `unique = true` that was not strictly needed,
+        never the reverse, and the reverse is a unique violation mid-run.
+        """
+        if column in self.columns:
+            return True
+        word = re.compile(rf"\b{re.escape(column)}\b")
+        return any(word.search(expression) for expression in self.expressions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +127,7 @@ class TableInfo:
         return frozenset(name for key in self.foreign_keys for name in key.columns)
 
     def unique_indexes_covering(self, column: str) -> tuple[UniqueIndexInfo, ...]:
-        return tuple(index for index in self.unique_indexes if column in index.columns)
+        return tuple(index for index in self.unique_indexes if index.covers(column))
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,17 +224,33 @@ def _table(inspector: sa.Inspector, name: str) -> TableInfo:
 
 
 def _unique_indexes(inspector: sa.Inspector, table: str) -> tuple[UniqueIndexInfo, ...]:
-    """Unique indexes and unique constraints, merged by name; the PK is excluded by both."""
+    """Unique indexes and unique constraints, merged by name; the PK is excluded by both.
+
+    An expression index reports `column_names = [None]` with the expression text beside
+    it; those None entries are dropped rather than stringified, and the expressions are
+    kept so `UniqueIndexInfo.covers` can still tie the index to a column.
+    """
     found: dict[str, UniqueIndexInfo] = {}
     for index, raw in enumerate(inspector.get_indexes(table)):
         if not raw.get("unique"):
             continue
         label = raw.get("name") or f"{table}_uq_{index}"
-        found[label] = UniqueIndexInfo(label, tuple(str(c) for c in raw.get("column_names") or ()))
+        found[label] = UniqueIndexInfo(
+            label,
+            _named_columns(raw.get("column_names")),
+            tuple(str(expression) for expression in raw.get("expressions") or ()),
+        )
     for index, constraint in enumerate(inspector.get_unique_constraints(table)):
         label = constraint.get("name") or f"{table}_uc_{index}"
-        found.setdefault(label, UniqueIndexInfo(label, tuple(constraint.get("column_names") or ())))
+        columns = _named_columns(constraint.get("column_names"))
+        found.setdefault(label, UniqueIndexInfo(label, columns))
     return tuple(found[label] for label in sorted(found))
+
+
+def _named_columns(raw: object) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(name) for name in raw if name is not None)
 
 
 def _column(table: str, raw: dict[str, Any]) -> ColumnInfo:

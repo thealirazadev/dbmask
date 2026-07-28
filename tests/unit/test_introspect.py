@@ -10,6 +10,7 @@ from dbmask.introspect import (
     OWNED_TABLES,
     PII_PATTERNS,
     TEXT_FAMILY,
+    UniqueIndexInfo,
     connect,
     database_name,
     match_pii,
@@ -130,6 +131,24 @@ def test_connect_maps_a_driver_failure_that_is_not_a_sqlalchemy_error(
         caught.value.message
     )
     assert "s3cr3t" not in caught.value.message
+
+
+def test_unique_index_covers_the_columns_it_names() -> None:
+    index = UniqueIndexInfo("uq_users_tenant_email", ("tenant_id", "email"))
+    assert index.covers("email")
+    assert not index.covers("phone")
+
+
+def test_expression_unique_index_covers_the_column_inside_its_expression() -> None:
+    # UNIQUE (lower(email)) reports no column name at all, so a masked email column would
+    # otherwise never be told it needs unique = true, and the run would collide mid-write.
+    index = UniqueIndexInfo("ix_users_lower_email", (), ("lower(email::text)",))
+    assert index.covers("email")
+
+
+def test_expression_match_is_whole_word_so_a_substring_is_not_coverage() -> None:
+    index = UniqueIndexInfo("ix_users_lower_nickname", (), ("lower(nickname)",))
+    assert not index.covers("name")
 
 
 def test_dbmask_owned_tables_are_named_so_they_never_read_as_drift() -> None:

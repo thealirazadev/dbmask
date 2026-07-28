@@ -145,6 +145,19 @@ def test_masked_unique_column_without_unique_true_is_named_with_its_index() -> N
     assert "unique index ix_users_email" in finding.message
 
 
+def test_masked_column_under_an_expression_unique_index_still_needs_unique_true() -> None:
+    table = make_table(
+        "users",
+        list(users_table().columns.values()),
+        primary_key=("id",),
+        unique_indexes=(UniqueIndexInfo("ix_users_lower_email", (), ("lower(email::text)",)),),
+    )
+    config = {"users": {**CLEAN_CONFIG["users"], "email": "fake_email"}}
+    finding = only(find_findings(make_plan(config), make_schema(table)))
+    assert finding.subject == "users.email"
+    assert "unique index ix_users_lower_email" in finding.message
+
+
 def test_masking_a_primary_key_column_is_refused() -> None:
     config = {"users": {**CLEAN_CONFIG["users"], "id": "fake_name"}}
     finding = only(find_findings(make_plan(config), make_schema(users_table())))

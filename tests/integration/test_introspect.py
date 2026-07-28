@@ -6,12 +6,30 @@ Both dialects must produce the same SchemaModel for the same DDL: everything dow
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
+import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 
 from dbmask.introspect import introspect
 
 pytestmark = pytest.mark.integration
+
+# Both dialects support a unique index over an expression; neither reports a column name
+# for it, and PostgreSQL reports a None placeholder that must not become a column called
+# "None". The index goes away with the fixture tables.
+EXPRESSION_INDEX_DDL = {
+    "postgresql": "CREATE UNIQUE INDEX ix_users_lower_email ON users (lower(email))",
+    "mysql": "CREATE UNIQUE INDEX ix_users_lower_email ON users ((lower(email)))",
+}
+
+
+@pytest.fixture
+def expression_unique_index(fixture_schema: Engine, dialect: str) -> Iterator[Engine]:
+    with fixture_schema.begin() as connection:
+        connection.execute(sa.text(EXPRESSION_INDEX_DDL[dialect]))
+    yield fixture_schema
 
 
 def test_all_fixture_tables_are_found(fixture_schema: Engine) -> None:
@@ -45,6 +63,16 @@ def test_unique_indexes_are_reported_and_the_primary_key_is_not(fixture_schema: 
     assert [index.name for index in users.unique_indexes] == ["ix_users_email"]
     assert users.unique_indexes_covering("email")[0].columns == ("email",)
     assert users.unique_indexes_covering("id") == ()
+
+
+def test_an_expression_unique_index_never_invents_a_column(
+    expression_unique_index: Engine,
+) -> None:
+    users = introspect(expression_unique_index).tables["users"]
+    indexes = {index.name: index for index in users.unique_indexes}
+    assert "ix_users_lower_email" in indexes
+    for index in users.unique_indexes:
+        assert set(index.columns) <= set(users.columns), index
 
 
 def test_foreign_keys_carry_their_names_and_both_ends(fixture_schema: Engine) -> None:
