@@ -70,7 +70,11 @@ def check_database_name(plan: MaskPlan, database: str) -> None:
 
 def find_findings(plan: MaskPlan, schema: SchemaModel, mode: str = MODE_ALL) -> list[Finding]:
     """Every drift and compatibility problem, PII findings first, then drift, then compat."""
-    findings = [*_drift(plan, schema), *_compatibility(plan, schema, mode)]
+    findings = [
+        *_drift(plan, schema),
+        *_compatibility(plan, schema, mode),
+        *_join_findings(plan, schema),
+    ]
     return sorted(findings, key=lambda f: (_SEVERITY_ORDER[f.severity], f.subject))
 
 
@@ -207,6 +211,55 @@ def _template_findings(columns: dict[str, ColumnRule], table: TableInfo) -> Iter
                     f'template references "{placeholder}", which is not a primary key or '
                     "keep column",
                 )
+
+
+def _join_findings(plan: MaskPlan, schema: SchemaModel) -> Iterator[Finding]:
+    """`[[verify.joins]]` pairs, checked before a run rather than after it.
+
+    Both sides have to exist, and both have to mask identically: determinism preserves a
+    logical join only when the two columns carry the same rule, so `unique = true` on one
+    side alone appends a suffix the other side never gets. Caught here it is one config
+    edit; caught by the post-run verification it is a database that has already been
+    rewritten and can no longer be trusted.
+    """
+    for join in plan.joins:
+        sides = ((join.left_table, join.left_column), (join.right_table, join.right_column))
+        absent = [
+            f"{table}.{column}" for table, column in sides if not _in_schema(schema, table, column)
+        ]
+        if absent:
+            yield Finding(
+                SEVERITY_DRIFT,
+                join.label,
+                f"verify join references {', '.join(absent)}, which is not in the schema",
+            )
+            continue
+        left = plan.tables.get(join.left_table, {}).get(join.left_column)
+        right = plan.tables.get(join.right_table, {}).get(join.right_column)
+        if left is None or right is None:
+            continue  # the drift pass already names the unconfigured column
+        if _mask_signature(left) != _mask_signature(right):
+            yield Finding(SEVERITY_COMPAT, join.label, _join_mismatch(left, right))
+
+
+def _in_schema(schema: SchemaModel, table: str, column: str) -> bool:
+    info = schema.tables.get(table)
+    return info is not None and column in info.columns
+
+
+def _mask_signature(rule: ColumnRule) -> tuple[str, str | None, str | None, bool]:
+    return (rule.strategy, rule.value, rule.template, rule.unique)
+
+
+def _join_mismatch(left: ColumnRule, right: ColumnRule) -> str:
+    if left.strategy != right.strategy:
+        detail = f'strategies "{left.strategy}" and "{right.strategy}"'
+    else:
+        detail = f'strategy "{left.strategy}" with different options'
+    return (
+        f"verify join sides use {detail}; a join survives only when both sides mask "
+        "identically, so give both columns the same rule"
+    )
 
 
 def _cycle_findings(schema: SchemaModel) -> Iterator[Finding]:

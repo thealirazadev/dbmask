@@ -130,6 +130,28 @@ def test_database_outside_the_safety_pattern_is_refused_with_exit_four(
     assert "does not match safety.database_name_pattern" in capsys.readouterr().err
 
 
+JOIN_BLOCK = '\n[[verify.joins]]\nleft  = "users.email"\nright = "orders.customer_email"\n'
+
+
+def test_check_refuses_a_verify_join_whose_two_sides_mask_differently(
+    url: str, config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """init makes users.email unique (it has a unique index) and customer_email not, so
+    the pair would mask to different addresses. That must fail before a run, not after."""
+    text = config.read_text(encoding="utf-8") + JOIN_BLOCK
+    config.write_text(text, encoding="utf-8")
+    assert main(["--config", str(config), "check", "--url", url]) == EXIT_FINDINGS
+    assert "users.email~orders.customer_email" in capsys.readouterr().out
+
+    repaired = text.replace(
+        'customer_email = "fake_email"',
+        'customer_email = { strategy = "fake_email", unique = true }',
+    )
+    assert repaired != text
+    config.write_text(repaired, encoding="utf-8")
+    assert main(["--config", str(config), "check", "--url", url]) == EXIT_OK
+
+
 def test_check_output_never_contains_a_seeded_value(
     url: str, config: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

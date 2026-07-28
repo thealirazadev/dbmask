@@ -231,6 +231,65 @@ def test_template_may_only_read_primary_key_or_keep_columns() -> None:
     assert find_findings(make_plan(allowed), make_schema(table)) == []
 
 
+def orders_table() -> TableInfo:
+    return make_table(
+        "orders",
+        [
+            make_column(
+                "orders", "id", family="integer", type_name="INTEGER", length=None, nullable=False
+            ),
+            make_column("orders", "customer_email", nullable=False),
+        ],
+        primary_key=("id",),
+    )
+
+
+JOIN_PAIR = [{"left": "users.email", "right": "orders.customer_email"}]
+
+
+def join_config(customer_email: object) -> dict[str, dict[str, object]]:
+    return {
+        "users": CLEAN_CONFIG["users"],
+        "orders": {"id": "keep", "customer_email": customer_email},
+    }
+
+
+def test_verify_join_sides_that_mask_identically_are_accepted() -> None:
+    config = join_config({"strategy": "fake_email", "unique": True})
+    plan = make_plan(config, joins=JOIN_PAIR)
+    assert find_findings(plan, make_schema(users_table(), orders_table())) == []
+
+
+def test_verify_join_is_refused_when_only_one_side_is_unique() -> None:
+    # The unique suffix is appended to one side only, so the two columns no longer hold
+    # the same fake address and the join the pair exists to protect is already gone.
+    config = join_config("fake_email")
+    plan = make_plan(config, joins=JOIN_PAIR)
+    finding = only(find_findings(plan, make_schema(users_table(), orders_table())))
+    assert finding.severity == SEVERITY_COMPAT
+    assert finding.subject == "users.email~orders.customer_email"
+    assert 'strategy "fake_email" with different options' in finding.message
+
+
+def test_verify_join_is_refused_when_the_sides_use_different_strategies() -> None:
+    config = join_config("keep")
+    plan = make_plan(config, joins=JOIN_PAIR)
+    finding = only(find_findings(plan, make_schema(users_table(), orders_table())))
+    assert finding.severity == SEVERITY_COMPAT
+    assert 'strategies "fake_email" and "keep"' in finding.message
+
+
+def test_verify_join_referencing_a_column_outside_the_schema_is_drift() -> None:
+    plan = make_plan(
+        join_config({"strategy": "fake_email", "unique": True}),
+        joins=[{"left": "users.email", "right": "orders.buyer_email"}],
+    )
+    finding = only(find_findings(plan, make_schema(users_table(), orders_table())))
+    assert finding.severity == SEVERITY_DRIFT
+    assert "orders.buyer_email" in finding.message
+    assert "not in the schema" in finding.message
+
+
 def test_findings_are_ordered_pii_then_drift_then_compat() -> None:
     table = users_table()
     table.columns["ssn"] = make_column("users", "ssn", nullable=False)
