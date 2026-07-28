@@ -12,14 +12,25 @@ them; the sweep that asserts this lands with the verification suite in phase 5.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
-from typing import Final
+from pathlib import Path
+from typing import Any, Final
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
+
+from dbmask.config import MaskPlan, build_plan
+from dbmask.introspect import (
+    ColumnInfo,
+    ForeignKeyInfo,
+    SchemaModel,
+    TableInfo,
+    UniqueIndexInfo,
+    match_pii,
+)
 
 DIALECTS: Final = ("postgresql", "mysql")
 
@@ -226,6 +237,74 @@ def fixture_schema(engine: Engine) -> Iterator[Engine]:
         yield engine
     finally:
         _reset(engine, seed=False)
+
+
+def make_column(
+    table: str,
+    name: str,
+    *,
+    family: str = "text",
+    type_name: str = "VARCHAR(120)",
+    length: int | None = 120,
+    nullable: bool = True,
+    pii: str | None = "auto",
+) -> ColumnInfo:
+    """A ColumnInfo for the unit tests; the PII label defaults to the real pattern match."""
+    if pii == "auto":
+        matched = match_pii(name)
+        pii = matched.label if matched is not None else None
+    return ColumnInfo(
+        table=table,
+        name=name,
+        family=family,
+        type_name=type_name,
+        length=length,
+        nullable=nullable,
+        pii=pii,
+    )
+
+
+def make_table(
+    name: str,
+    columns: Sequence[ColumnInfo],
+    *,
+    primary_key: tuple[str, ...] = (),
+    foreign_keys: tuple[ForeignKeyInfo, ...] = (),
+    unique_indexes: tuple[UniqueIndexInfo, ...] = (),
+) -> TableInfo:
+    return TableInfo(
+        name=name,
+        columns={column.name: column for column in columns},
+        primary_key=primary_key,
+        foreign_keys=foreign_keys,
+        unique_indexes=unique_indexes,
+    )
+
+
+def make_schema(
+    *tables: TableInfo, database: str = "app_staging", dialect: str = "postgresql"
+) -> SchemaModel:
+    return SchemaModel(
+        database=database,
+        dialect=dialect,
+        tables={table.name: table for table in tables},
+    )
+
+
+def make_plan(
+    tables: dict[str, dict[str, Any]],
+    *,
+    pattern: str | None = "_staging$",
+    joins: list[dict[str, str]] | None = None,
+) -> MaskPlan:
+    data: dict[str, Any] = {
+        "tables": {name: {"columns": columns} for name, columns in tables.items()}
+    }
+    if pattern is not None:
+        data["safety"] = {"database_name_pattern": pattern}
+    if joins is not None:
+        data["verify"] = {"joins": joins}
+    return build_plan(data, Path("dbmask.toml"))
 
 
 def _reset(engine: Engine, seed: bool = True) -> None:
