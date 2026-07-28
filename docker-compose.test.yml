@@ -1,0 +1,32 @@
+# Throwaway databases for the integration suite. Credentials here are deliberately
+# public: nothing real ever runs against these containers.
+# Database names end in _staging so the fixture safety pattern matches.
+name: dbmask-test
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dbmask
+      POSTGRES_PASSWORD: dbmask
+      POSTGRES_DB: dbmask_staging
+    ports:
+      - "54329:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbmask"]
+      interval: 2s
+      retries: 30
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_USER: dbmask
+      MYSQL_PASSWORD: dbmask
+      MYSQL_DATABASE: dbmask_staging
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "33069:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 2s
+      retries: 60
