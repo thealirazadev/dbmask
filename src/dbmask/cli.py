@@ -22,6 +22,9 @@ from .emit import render_config, write_config
 from .errors import EXIT_CONFIG, EXIT_OK, EXIT_RUNTIME, DbmaskError, ErrorCode
 from .introspect import SchemaModel, connect, database_name, introspect
 from .logging import log_event
+from .report import ReportData, write_report
+from .runner_mask import mask_plan
+from .strategies import StrategyEngine
 
 SECRET_ENV: Final = "DBMASK_SECRET"
 MIN_SECRET_LENGTH: Final = 32
@@ -174,11 +177,6 @@ def _strategy_summary(rules: Sequence[ColumnRule]) -> str:
     default=None,
     help="Write the JSON audit report to this path.",
 )
-@click.option(
-    "--allow-remasked",
-    is_flag=True,
-    help="DANGEROUS: skip the already-masked refusal. Test environments only.",
-)
 @click.pass_context
 def mask(
     ctx: click.Context,
@@ -186,13 +184,75 @@ def mask(
     dry_run: bool,
     resume: bool,
     report: Path | None,
-    allow_remasked: bool,
 ) -> None:
     """UPDATE rows in place in the database at --url. Destructive by design."""
-    _plan(ctx)
-    load_secret()
-    require_url(url, "DBMASK_URL", "--url")
-    _not_implemented("mask", 3)
+    plan = _plan(ctx)
+    secret = load_secret()
+    resolved_url = require_url(url, "DBMASK_URL", "--url")
+
+    # Check the database name pattern before connecting
+    check_database_name(plan, database_name(resolved_url))
+
+    # Dry run: show the plan
+    if dry_run:
+        schema = read_schema(resolved_url)
+        findings = find_findings(plan, schema, mode="mask")
+        if findings:
+            for line in format_findings(findings):
+                click.echo(line)
+            raise DbmaskError(
+                ErrorCode.E_DRIFT,
+                "fix the findings and re-run",
+            )
+        click.echo("dry run: would mask these tables in order:")
+        for table_name in sorted(plan.tables.keys()):
+            click.echo(f"  {table_name}")
+        click.echo("no rows were read or written")
+
+    # Real run: connect and execute
+    engine = connect(resolved_url)
+    try:
+        with engine.begin() as connection:
+            schema = introspect(engine)
+            findings = find_findings(plan, schema, mode="mask")
+            if findings:
+                for line in format_findings(findings):
+                    click.echo(line)
+                raise DbmaskError(
+                    ErrorCode.E_DRIFT,
+                    "fix the findings and re-run",
+                )
+
+            strategy_engine = StrategyEngine(secret, plan.locale, plan.settings.cache_size)
+            result = mask_plan(
+                connection,
+                strategy_engine,
+                plan,
+                schema,
+                secret,
+                resume=resume,
+                dry_run=False,
+            )
+
+            click.echo(f"masked {result.rows_masked} rows across {result.tables_done} tables")
+
+            # Write report if requested
+            if report:
+                report_data = ReportData(
+                    run_id=result.run_id,
+                    mode="mask",
+                    status="completed",
+                    tool_version=__version__,
+                    config_hash=plan.config_hash,
+                    secret_fingerprint="",
+                    locale=plan.locale,
+                    rows_masked=result.rows_masked,
+                    started_at="",
+                    finished_at="",
+                )
+                write_report(report, report_data)
+    finally:
+        engine.dispose()
 
 
 @cli.command()
