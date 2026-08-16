@@ -245,6 +245,7 @@ def mask_plan(
     with advisory_lock(connection, schema.database):
         # Import __version__ here to get the tool version
         from . import __version__
+
         # Start the run (new or resume)
         run_id, config_hash = _start_run(connection, plan, secret, __version__)
         connection.commit()

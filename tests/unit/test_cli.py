@@ -88,9 +88,11 @@ def test_database_commands_report_not_implemented(
 ) -> None:
     monkeypatch.setenv(SECRET_ENV, SECRET)
     monkeypatch.setenv("DBMASK_URL", "postgresql+psycopg://u:p@localhost:5432/app_staging")
-    assert main(["--config", str(write_config(tmp_path)), "mask"]) == EXIT_RUNTIME
+    # mask and pump are now implemented and will try to connect; connection will fail
+    # verify still reports not implemented
+    assert main(["--config", str(write_config(tmp_path)), "verify"]) == EXIT_RUNTIME
     err = capsys.readouterr().err
-    assert err.startswith("error[E_INTERNAL]: mask is not implemented yet")
+    assert err.startswith("error[E_INTERNAL]: verify is not implemented yet")
     assert "u:p" not in err
 
 
