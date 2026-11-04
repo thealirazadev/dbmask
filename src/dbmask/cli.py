@@ -208,6 +208,7 @@ def mask(
         for table_name in sorted(plan.tables.keys()):
             click.echo(f"  {table_name}")
         click.echo("no rows were read or written")
+        return
 
     # Real run: connect and execute
     engine = connect(resolved_url)
