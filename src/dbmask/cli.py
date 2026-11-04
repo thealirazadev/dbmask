@@ -213,7 +213,9 @@ def mask(
     # Real run: connect and execute
     engine = connect(resolved_url)
     try:
-        with engine.begin() as connection:
+        # A plain connection, not engine.begin(): the runner commits each batch together
+        # with its progress row, and an outer transaction block would refuse those commits.
+        with engine.connect() as connection:
             schema = introspect(engine)
             findings = find_findings(plan, schema, mode="mask")
             if findings:
