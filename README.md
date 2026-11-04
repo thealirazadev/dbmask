@@ -67,5 +67,6 @@ details in `docs/architecture.md`.
 
 ## Status
 
-Planning stage: these documents are the complete spec, and no code exists yet. Implementation
-proceeds phase by phase per `docs/phases.md`, starting with the deterministic strategy engine.
+Phases 1 and 2 are complete: config, the strategy engine, the CLI skeleton, introspection, `init`,
+and `check`. `mask`, `pump`, and `verify` are not implemented yet. Implementation proceeds phase
+by phase per `docs/phases.md`, with Phase 3 (in-place mask) next.
