@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 import pytest
 import sqlalchemy as sa
@@ -14,7 +16,10 @@ from dbmask.audit import AUDIT_TABLE, PROGRESS_TABLE
 from dbmask.audit import metadata as audit_metadata
 from dbmask.cli import main
 from dbmask.errors import EXIT_OK, DbmaskError, ErrorCode
-from tests.conftest import ADDRESS_ROWS, SENTINEL_NOTE, SENTINELS, TEST_SECRET, USER_ROWS
+from dbmask.introspect import introspect
+from dbmask.runner_mask import mask_plan
+from dbmask.strategies import StrategyEngine
+from tests.conftest import ADDRESS_ROWS, SENTINEL_NOTE, SENTINELS, TEST_SECRET, USER_ROWS, make_plan
 
 pytestmark = pytest.mark.integration
 
@@ -102,3 +107,60 @@ def test_a_failed_batch_is_rolled_back_not_committed(
         status = connection.execute(sa.text(f"SELECT status FROM {AUDIT_TABLE}")).scalars()
         assert list(streets) == [row["street"] for row in ADDRESS_ROWS]
         assert list(status) == ["failed"]
+
+
+def test_a_uuid_primary_key_masks_and_resumes(
+    fixture_schema: Engine, url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if fixture_schema.dialect.name != "postgresql":
+        pytest.skip("MySQL has no native uuid column type")
+    ids = [UUID(int=1), UUID(int=2), UUID(int=3)]
+    tokens = sa.Table(
+        "tokens",
+        sa.MetaData(),
+        sa.Column("id", sa.Uuid, primary_key=True),
+        sa.Column("owner_name", sa.String(120), nullable=False),
+    )
+    tokens.create(fixture_schema)
+    try:
+        with fixture_schema.begin() as connection:
+            connection.execute(
+                sa.insert(tokens), [{"id": key, "owner_name": "Real Person"} for key in ids]
+            )
+        plan = make_plan({"tokens": {"id": "keep", "owner_name": "fake_name"}})
+        schema = introspect(fixture_schema)
+
+        calls = 0
+        real_upsert = runner_mask.upsert_progress
+
+        def upsert_then_crash(*args: Any, **kwargs: Any) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise DbmaskError(ErrorCode.E_MASK, "simulated crash")
+            real_upsert(*args, **kwargs)
+
+        monkeypatch.setattr(runner_mask, "upsert_progress", upsert_then_crash)
+        with fixture_schema.connect() as connection, pytest.raises(DbmaskError):
+            mask_plan(
+                connection, StrategyEngine(TEST_SECRET), plan, schema, TEST_SECRET, batch_size=1
+            )
+        monkeypatch.setattr(runner_mask, "upsert_progress", real_upsert)
+        with fixture_schema.connect() as connection:
+            result = mask_plan(
+                connection,
+                StrategyEngine(TEST_SECRET),
+                plan,
+                schema,
+                TEST_SECRET,
+                resume=True,
+                batch_size=1,
+            )
+            names = connection.execute(
+                sa.select(tokens.c.owner_name).order_by(tokens.c.id)
+            ).scalars()
+            assert "Real Person" not in list(names)
+        assert result.rows_masked == len(ids)
+    finally:
+        audit_metadata.drop_all(fixture_schema, checkfirst=True)
+        tokens.drop(fixture_schema)

@@ -185,7 +185,9 @@ def _mask_table(
         # Update progress for this batch
         last_row = row_dicts[-1]
         last_pk = [last_row[name] for name in pk_names]
-        last_pk_json = json.dumps(last_pk)
+        # Primary keys are not always JSON types (PostgreSQL uuid, numeric, dates), so they
+        # are stored as text; the resume cursor binds them back with the column's own type.
+        last_pk_json = json.dumps(last_pk, default=str)
         total_rows += len(rows)
         upsert_progress(connection, run_id, table_name, last_pk_json, total_rows)
 
