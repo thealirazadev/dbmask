@@ -284,8 +284,16 @@ def mask_plan(
                 tables_done=tables_done,
             )
         except Exception as exc:
-            # Mark the run as failed
-            finish_run(connection, run_id, STATUS_FAILED, 0)
-            connection.commit()
+            # Discard the batch in flight first. Committing it together with the failed
+            # status would persist masked rows whose progress was never recorded, and the
+            # next --resume would mask them a second time. On PostgreSQL the aborted
+            # transaction would also refuse the status update and hide the real error.
             log_event("mask.failed", run_id=run_id, error=type(exc).__name__)
+            connection.rollback()
+            try:
+                finish_run(connection, run_id, STATUS_FAILED, 0)
+                connection.commit()
+            except DbmaskError:
+                connection.rollback()
+                log_event("mask.failed_status_not_recorded", run_id=run_id)
             raise

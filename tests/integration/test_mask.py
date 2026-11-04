@@ -9,11 +9,12 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
 
+from dbmask import runner_mask
 from dbmask.audit import AUDIT_TABLE, PROGRESS_TABLE
 from dbmask.audit import metadata as audit_metadata
 from dbmask.cli import main
-from dbmask.errors import EXIT_OK
-from tests.conftest import SENTINEL_NOTE, SENTINELS, TEST_SECRET, USER_ROWS
+from dbmask.errors import EXIT_OK, DbmaskError, ErrorCode
+from tests.conftest import ADDRESS_ROWS, SENTINEL_NOTE, SENTINELS, TEST_SECRET, USER_ROWS
 
 pytestmark = pytest.mark.integration
 
@@ -84,3 +85,20 @@ def test_mask_rewrites_pii_and_keeps_the_email_join(
     assert joined == 4
     assert status == ["completed"]
     assert not [s for s in SENTINELS if s != SENTINEL_NOTE and s in dumped]
+
+
+def test_a_failed_batch_is_rolled_back_not_committed(
+    fixture_schema: Engine, url: str, config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fail after the batch UPDATE has run but before its transaction commits.
+    def failing_upsert(*args: object, **kwargs: object) -> None:
+        raise DbmaskError(ErrorCode.E_MASK, "writing dbmask_progress failed")
+
+    monkeypatch.setattr(runner_mask, "upsert_progress", failing_upsert)
+    assert main(["--config", str(config), "mask", "--url", url]) != EXIT_OK
+
+    with fixture_schema.connect() as connection:
+        streets = connection.execute(sa.text("SELECT street FROM addresses ORDER BY id")).scalars()
+        status = connection.execute(sa.text(f"SELECT status FROM {AUDIT_TABLE}")).scalars()
+        assert list(streets) == [row["street"] for row in ADDRESS_ROWS]
+        assert list(status) == ["failed"]
