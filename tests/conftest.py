@@ -308,7 +308,11 @@ def make_plan(
 
 
 def _reset(engine: Engine, seed: bool = True) -> None:
+    from dbmask.audit import metadata as audit_metadata
+
     with engine.begin() as connection:
+        # A fresh restore never carries a previous run's bookkeeping.
+        audit_metadata.drop_all(connection, checkfirst=True)
         metadata.drop_all(connection, checkfirst=True)
         if not seed:
             return
