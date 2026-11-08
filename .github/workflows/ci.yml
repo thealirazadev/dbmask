@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dbmask
+          POSTGRES_PASSWORD: dbmask
+          POSTGRES_DB: dbmask_staging
+        ports: ["54329:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dbmask" --health-interval 2s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_USER: dbmask
+          MYSQL_PASSWORD: dbmask
+          MYSQL_DATABASE: dbmask_staging
+          MYSQL_ROOT_PASSWORD: root
+        ports: ["33069:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h localhost" --health-interval 2s --health-retries 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.28"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run black --check .
+
+      - name: Typecheck
+        run: uv run mypy src
+
+      - name: Tests (unit and database integration)
+        run: uv run pytest
