@@ -219,5 +219,8 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
   2. `hash`: kept the full 64-character digest and corrected `docs/architecture.md` (flagged
      change) instead of truncating, since truncation weakens uniqueness and `check` already
      refuses a too-short column.
-- Remaining phase 3 checks not yet automated: kill mid-table then `--resume`, resume with a
-  changed config or secret, concurrent lock refusal, and a forced unique collision.
+- Also automated on both dialects: a run interrupted between batches is refused without
+  `--resume` (exit 4) and with `--resume` ends identical to an uninterrupted run; resume with a
+  changed secret is refused; a second process is refused while the lock is held, with no
+  writes. Still manual: a forced unique collision (the safety-pattern refusal was already
+  covered by test_init_check).

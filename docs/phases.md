@@ -133,9 +133,9 @@ Phase 3 writes could violate it).
       `completed`, report counts match row counts.
 - [x] Same dump masked twice (fresh restores) with one secret -> identical masked values; a
       different secret -> different values.
-- [ ] Kill the process mid-table (test hook between batches); re-run without `--resume` ->
+- [x] Kill the process mid-table (test hook between batches); re-run without `--resume` ->
       refused exit 4; with `--resume` -> final state equals an uninterrupted run's dump.
-- [ ] Resume with a modified config or different secret -> refused with the fingerprint message.
+- [x] Resume with a modified config or different secret -> refused with the fingerprint message.
 - [ ] Mask against a DB named outside the safety pattern -> refused before any write; second
       mask after completion -> refused (already masked); concurrent second process -> lock
       refusal.
