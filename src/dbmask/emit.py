@@ -104,7 +104,8 @@ def render_config(schema: SchemaModel) -> str:
         "",
         "[safety]",
         "# dbmask refuses to mask a database whose name does not match this pattern.",
-        f"database_name_pattern = {_string(_safety_pattern(schema.database))}",
+        *_safety_warning(schema.database),
+        f"database_name_pattern = {_string(DEFAULT_SAFETY_PATTERN)}",
         "",
         "[settings]",
         f"batch_size = {DEFAULT_BATCH_SIZE}",
@@ -125,11 +126,18 @@ def render_config(schema: SchemaModel) -> str:
     return "\n".join(lines)
 
 
-def _safety_pattern(database: str) -> str:
-    """The default pattern, or one anchored to this database when the default misses it."""
+def _safety_warning(database: str) -> list[str]:
+    """A comment, never a pattern, when the introspected database misses the default.
+
+    init often runs against production to read the schema; writing a pattern that matched the
+    introspected name would make that config permit masking production.
+    """
     if re.search(DEFAULT_SAFETY_PATTERN, database):
-        return DEFAULT_SAFETY_PATTERN
-    return f"^{re.escape(database)}$"
+        return []
+    return [
+        f'# "{database}" does not match, so mask will refuse it. Mask only a disposable copy',
+        "# whose name ends in _staging or _masked, or edit the pattern deliberately.",
+    ]
 
 
 def _table_lines(proposals: dict[str, Proposal]) -> list[str]:

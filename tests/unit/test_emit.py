@@ -127,11 +127,15 @@ def test_non_pii_columns_are_kept_without_comments() -> None:
     assert proposal.comments == ()
 
 
-def test_safety_pattern_is_anchored_when_the_default_would_not_match() -> None:
+def test_safety_pattern_never_matches_the_introspected_production_database() -> None:
     default = render_config(make_schema(users_table(), database="app_staging"))
     assert f'database_name_pattern = "{DEFAULT_SAFETY_PATTERN}"' in default
-    anchored = rendered_plan(render_config(make_schema(users_table(), database="copy1")))
-    assert anchored.database_name_pattern == "^copy1$"  # type: ignore[attr-defined]
+    assert "mask will refuse it" not in default
+
+    from_prod = render_config(make_schema(users_table(), database="app_prod"))
+    plan = rendered_plan(from_prod)
+    assert plan.database_name_pattern == DEFAULT_SAFETY_PATTERN  # type: ignore[attr-defined]
+    assert '# "app_prod" does not match, so mask will refuse it.' in from_prod
 
 
 def test_column_names_that_are_not_bare_keys_are_quoted() -> None:
