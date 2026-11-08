@@ -199,3 +199,25 @@ work; log every non-obvious decision with its reason. Keep entries short and dat
   doc, so it needs a call. And `init` anchors `safety.database_name_pattern` to the database it
   introspected when the default staging pattern does not match, which means a config generated
   against production would permit masking production.
+
+## Phase 3 verification and the two open findings (2026-11-09)
+
+- First real run of `mask` against PostgreSQL and MySQL found three bugs: `--dry-run` printed
+  "no rows were read or written" and then masked the whole database (the CLI fell through to
+  the real run); every real run failed with `InvalidRequestError` because the CLI wrapped the
+  run in `engine.begin()` while the runner commits each batch itself; and the JSON report
+  hard-coded `status` and left the secret fingerprint and timestamps empty. All fixed; new
+  integration tests cover dry run (no writes, no audit tables), a full mask (logical join
+  preserved once declared with matching rules, unique index holds, NULLs and `keep` columns
+  untouched, no sentinel in masked columns or output), determinism and secret dependence, and
+  refusal of a second mask, on both dialects. The fixture reset now drops dbmask's audit
+  tables, as a fresh restore would.
+- Owner findings, resolved with the owner's go-ahead to follow recommendations:
+  1. `init` no longer anchors `safety.database_name_pattern` to the introspected database. It
+     always writes the default pattern and, when the database misses it, a comment saying mask
+     will refuse it. A config generated against production can no longer permit masking it.
+  2. `hash`: kept the full 64-character digest and corrected `docs/architecture.md` (flagged
+     change) instead of truncating, since truncation weakens uniqueness and `check` already
+     refuses a too-short column.
+- Remaining phase 3 checks not yet automated: kill mid-table then `--resume`, resume with a
+  changed config or secret, concurrent lock refusal, and a forced unique collision.

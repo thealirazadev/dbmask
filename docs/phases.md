@@ -128,10 +128,10 @@ Phase 3 writes could violate it).
 
 ### Verification checklist
 
-- [ ] Full mask of the fixture DB: joins between `users.email` and `orders.customer_email`
+- [x] Full mask of the fixture DB: joins between `users.email` and `orders.customer_email`
       preserved, unique index holds, NULLs untouched, `keep` columns byte-identical, audit row
       `completed`, report counts match row counts.
-- [ ] Same dump masked twice (fresh restores) with one secret -> identical masked values; a
+- [x] Same dump masked twice (fresh restores) with one secret -> identical masked values; a
       different secret -> different values.
 - [ ] Kill the process mid-table (test hook between batches); re-run without `--resume` ->
       refused exit 4; with `--resume` -> final state equals an uninterrupted run's dump.
@@ -141,7 +141,7 @@ Phase 3 writes could violate it).
       refusal.
 - [ ] Forced unique collision (two rows crafted to collide after suffixing) -> batch rolls
       back, `E_MASK` names table and constraint, no partial batch visible.
-- [ ] `--dry-run` performs no writes (checked via row counts and absence of audit tables) and
+- [x] `--dry-run` performs no writes (checked via row counts and absence of audit tables) and
       prints the per-column plan; sentinel grep over all captured output finds no real value.
 
 ---

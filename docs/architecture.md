@@ -71,8 +71,9 @@ The heart of the tool. For a non-NULL input value:
    The strategy family is part of the message (domain separation): a string masked as a name and
    the same string masked as an email produce uncorrelated outputs.
 3. **Generate**: `faker.seed_instance(seed)` then call the family's provider (`email()`,
-   `name()`, `phone_number()`, `address()`). `hash` skips Faker: output is the hex HMAC digest
-   truncated to the column length. `redact` returns the fixed configured string; `null` returns
+   `name()`, `phone_number()`, `address()`). `hash` skips Faker: output is the full 64-character hex
+   HMAC digest, never truncated (a shorter digest weakens uniqueness); `check` reports a column
+   shorter than 64 characters as incompatible so the operator picks another strategy. `redact` returns the fixed configured string; `null` returns
    NULL; `keep` returns the input; `template` renders `"{placeholder}"` substitutions from
    same-row column values.
 4. **Cache**: results are memoized per `(family, normalized)` in an LRU capped at
