@@ -16,6 +16,7 @@ from typing import Final
 import click
 
 from . import __version__
+from .audit import completed_run, utcnow
 from .config import DEFAULT_CONFIG_NAME, STRATEGY_NAMES, ColumnRule, MaskPlan, load_plan
 from .drift import check_database_name, find_findings, format_findings, pii_count
 from .emit import render_config, write_config
@@ -208,11 +209,12 @@ def mask(
         for table_name in sorted(plan.tables.keys()):
             click.echo(f"  {table_name}")
         click.echo("no rows were read or written")
+        return
 
     # Real run: connect and execute
     engine = connect(resolved_url)
     try:
-        with engine.begin() as connection:
+        with engine.connect() as connection:  # the runner commits each batch itself
             schema = introspect(engine)
             findings = find_findings(plan, schema, mode="mask")
             if findings:
@@ -238,17 +240,19 @@ def mask(
 
             # Write report if requested
             if report:
+                # The audit row is the record of this run; the report mirrors it.
+                run = completed_run(connection)
                 report_data = ReportData(
                     run_id=result.run_id,
                     mode="mask",
-                    status="completed",
+                    status=run.status if run else "completed",
                     tool_version=__version__,
                     config_hash=plan.config_hash,
-                    secret_fingerprint="",
+                    secret_fingerprint=run.secret_fingerprint if run else "",
                     locale=plan.locale,
                     rows_masked=result.rows_masked,
-                    started_at="",
-                    finished_at="",
+                    started_at=run.started_at.isoformat() if run else "",
+                    finished_at=utcnow().isoformat(),
                 )
                 write_report(report, report_data)
     finally:
