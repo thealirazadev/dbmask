@@ -112,3 +112,72 @@ def test_masking_is_deterministic_and_secret_dependent(
 def test_a_second_mask_is_refused(fixture_schema: Engine, url: str, config: Path) -> None:
     assert main(["--config", str(config), "mask", "--url", url]) == EXIT_OK
     assert main(["--config", str(config), "mask", "--url", url]) != EXIT_OK
+
+
+def small_batches(config: Path) -> Path:
+    config.write_text(config.read_text().replace("batch_size = 5000", "batch_size = 1"))
+    return config
+
+
+def crash_after(monkeypatch: pytest.MonkeyPatch, batches: int) -> None:
+    """Fail the run after `batches` committed batches, as a killed process would stop."""
+    from dbmask import runner_mask
+
+    real = runner_mask.update_batch
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > batches:
+            raise RuntimeError("simulated crash between batches")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(runner_mask, "update_batch", flaky)
+
+
+def test_resume_finishes_an_interrupted_run_exactly_like_an_uninterrupted_one(
+    fixture_schema: Engine, url: str, config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dbmask import runner_mask
+    from tests.conftest import _reset
+
+    small_batches(config)
+    args = ["--config", str(config), "mask", "--url", url]
+    assert main(args) == EXIT_OK
+    expected = {t: rows(fixture_schema, t) for t in ("users", "orders", "addresses")}
+
+    _reset(fixture_schema)
+    real = runner_mask.update_batch
+    crash_after(monkeypatch, 2)
+    assert main(args) != EXIT_OK
+    monkeypatch.setattr(runner_mask, "update_batch", real)
+
+    assert main(args) == 4  # an incomplete run exists: refused without --resume
+    assert main([*args, "--resume"]) == EXIT_OK
+    assert {t: rows(fixture_schema, t) for t in expected} == expected
+
+
+def test_resume_refuses_a_changed_secret(
+    fixture_schema: Engine, url: str, config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    small_batches(config)
+    crash_after(monkeypatch, 1)
+    args = ["--config", str(config), "mask", "--url", url]
+    assert main(args) != EXIT_OK
+    monkeypatch.undo()
+    monkeypatch.setenv("DBMASK_SECRET", "another-secret-that-is-at-least-32-chars")
+    for name in ("DBMASK_URL", "DBMASK_SOURCE_URL", "DBMASK_TARGET_URL"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert main([*args, "--resume"]) != EXIT_OK
+
+
+def test_a_second_process_is_refused_while_the_lock_is_held(
+    fixture_schema: Engine, url: str, config: Path
+) -> None:
+    from dbmask.dialects import advisory_lock
+
+    before = rows(fixture_schema, "users")
+    with fixture_schema.connect() as other, advisory_lock(other, fixture_schema.url.database):
+        assert main(["--config", str(config), "mask", "--url", url]) == 4
+    assert rows(fixture_schema, "users") == before
