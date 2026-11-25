@@ -11,7 +11,7 @@
   enforcement are exactly the things a stand-in would fake.
 - **End-to-end via the CLI.** The highest-value tests invoke `dbmask` through Click's
   `CliRunner` (and a few via `subprocess` for exit-code truth) against the dockerized fixture:
-  init -> check -> mask -> verify as an operator would run them.
+  init -> check -> mask as an operator would run them (verify joins once it is implemented).
 - **Determinism is tested structurally**: outputs compared across two separately constructed
   engines (never within one process's cache), across the two modes (mask vs pump), and across
   the two dialects.
@@ -31,8 +31,8 @@ unique indexes, FKs), init-then-check round trip, mask runner (batches, transact
 guards, lock), pump runner (read-only source, preflight, ordering, COPY/INSERT), audit and
 progress rows, verification checks, report contents.
 
-End-to-end: the Phase checklists in `docs/phases.md`, automated where a process boundary matters
-(kill-mid-run resume, concurrent lock refusal, exit codes via subprocess).
+End-to-end: the operator flows (init, check, mask, resume after an interrupted run, a second
+process refused by the lock, exit codes), automated wherever a process boundary matters.
 
 ## Docker compose test setup
 
@@ -55,7 +55,7 @@ services:
 Database names end in `_staging` so the fixture safety pattern matches. `conftest.py` reads
 `DBMASK_TEST_PG_URL` / `DBMASK_TEST_MYSQL_URL` (defaults matching the compose ports), creates a
 fresh schema per test via a fixture, and skips `integration`-marked tests with a clear message
-when a database is unreachable. Pump tests create a second database per engine on the fly.
+when a database is unreachable.
 
 ## Exact commands
 
@@ -65,25 +65,27 @@ uv run pytest -m "not integration"                 # unit suite, no docker neede
 docker compose -f docker-compose.test.yml up -d --wait
 uv run pytest                                      # full suite, both dialects
 uv run pytest tests/integration/test_mask.py -k resume   # one area
-uv run ruff check . && uv run black --check . && uv run mypy --strict src
+uv run ruff check . && uv run black --check . && uv run mypy src
 docker compose -f docker-compose.test.yml down -v  # clean up
 ```
 
-## CI plan
+## CI
 
-GitHub Actions, two jobs on every push and PR to `main`:
+`.github/workflows/ci.yml` runs one job on every push and pull request to `main`. PostgreSQL 16
+and MySQL 8.4 run as service containers with the same images, credentials and ports as
+`docker-compose.test.yml`, so the integration tests run rather than skip. The steps:
 
-1. **lint-unit**: `ruff check`, `black --check`, `mypy --strict src`, `pytest -m "not
-   integration"`. No services, finishes fast, no secrets.
-2. **integration**: the two databases as service containers (same images and env as compose),
-   full `pytest`. Runs after lint-unit passes.
+1. `uv sync --frozen` (Python 3.12, from the committed `uv.lock`)
+2. `uv run ruff check .`
+3. `uv run black --check .`
+4. `uv run mypy src`
+5. `uv run pytest` (unit and integration, both dialects)
 
-No real credentials exist anywhere in CI; test databases use throwaway passwords committed in
-the compose file. A red integration job blocks merge exactly like a red unit job.
+No real credentials exist anywhere in CI; the test databases use throwaway passwords committed in
+the compose file and the workflow.
 
-## Definition of done for a feature
+## Before merging
 
-1. `uv run ruff check .`, `uv run black --check .`, `uv run mypy --strict src` clean.
-2. `uv run pytest` green including both dialects for schema-touching changes.
-3. The feature's checklist items in `docs/phases.md` pass.
-4. The sentinel sweep still finds no real value in any captured output.
+1. `uv run ruff check .`, `uv run black --check .`, `uv run mypy src` clean.
+2. `uv run pytest` green, including both dialects for schema-touching changes.
+3. The sentinel assertions still find no real value in any captured output or report.

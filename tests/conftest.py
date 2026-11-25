@@ -6,7 +6,7 @@ is unreachable the tests skip with a message naming the compose file, so a check
 without docker still runs the whole unit suite.
 
 The seeded values include sentinel strings. Nothing in dbmask's output may ever contain
-them; the sweep that asserts this lands with the verification suite in phase 5.
+them; the init, check and mask tests assert that against captured output and reports.
 """
 
 from __future__ import annotations

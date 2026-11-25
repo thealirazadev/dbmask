@@ -14,29 +14,30 @@ Restoring production into staging hands real customer emails, names, phones, and
 the least protected environment you run. Hand-rolled UPDATE scripts miss new columns silently,
 scramble the same email differently in different tables (breaking joins), collide on unique
 indexes, and leave no record of what was actually masked. dbmask replaces that script with a
-declarative config, a schema drift guard, deterministic output, post-run verification, and an
-audit report.
+declarative config, a schema drift guard, deterministic output, an audit report, and (planned) post-run
+verification.
 
-## Planned features
-
-All of the following is planned behavior; implementation follows `docs/phases.md`.
+## Features
 
 - Nine masking strategies per column: `fake_email`, `fake_name`, `fake_phone`, `fake_address`,
   `redact` (fixed string), `null`, `hash` (keyed), `keep`, and derived `template` values.
 - Deterministic masking seeded per project secret via HMAC: preserves joins (the same email in
   `users.email` and `orders.customer_email` masks identically) and makes runs reproducible.
-- Two modes: in-place mask of a restored copy (batched updates by primary-key range, resumable
-  after a crash), and pump mode (read-only source to an empty target, in foreign-key order,
-  COPY-fast on PostgreSQL).
+- In-place mask of a restored copy: batched updates in primary-key order, each batch committed
+  with its progress record, resumable after a crash with `--resume`.
 - Schema drift guard: unconfigured columns fail the run by name; columns matching PII name
   patterns (email, phone, name, address, dob, ssn, ...) are deny-by-default.
 - `dbmask init`: introspects the schema and writes a starter config with PII columns pre-flagged.
-- Referential consistency verification after every run: foreign keys, configured logical join
-  pairs, unique indexes, and pump row counts.
-- Safety guards: database-name pattern check before any write, already-masked detection,
+- `dbmask check`: drift and compatibility findings (key columns, length budgets, unique indexes,
+  declared join pairs) before anything is written.
+- Safety guards: database-name pattern check before connecting, already-masked detection,
   single-runner lock, secret only via environment variable.
-- JSON audit report of what was masked (counts per column, never sample values) and a `--dry-run`
-  that prints the full plan without touching data.
+- JSON audit report of the run (counts, config hash, secret fingerprint, never sample values) and
+  a `--dry-run` that checks the plan without touching data.
+
+Not implemented yet: `pump` (read-only source into an empty target, in foreign-key order) and
+`verify` (post-run checks of foreign keys, join pairs, unique indexes and row counts). Both
+commands exist on the CLI and currently exit with a "not implemented" error.
 
 An honest limit, stated up front: deterministic masking is pseudonymization, not anonymization.
 Anyone holding the project secret can confirm guessed real values by dictionary attack, and value
@@ -55,17 +56,13 @@ details in `docs/architecture.md`.
 
 | Doc | Contents |
 |---|---|
-| [docs/PRD.md](docs/PRD.md) | Problem, goals, non-goals, user stories, requirements, success criteria |
 | [docs/architecture.md](docs/architecture.md) | Stack rationale, components, data model, flows, failure modes, invariants |
-| [docs/rules.md](docs/rules.md) | Engineering rules, including the value-hygiene rule |
-| [docs/phases.md](docs/phases.md) | Implementation phases with commit lists and verification checklists |
+| [docs/decisions.md](docs/decisions.md) | Design decisions and the bugs and edge cases behind them |
 | [docs/design.md](docs/design.md) | CLI UX: commands, flags, output, exit codes |
-| [docs/testing.md](docs/testing.md) | Test strategy, docker compose setup, CI plan |
+| [docs/testing.md](docs/testing.md) | Test strategy, docker compose setup, CI |
 | [docs/api-contracts.md](docs/api-contracts.md) | CLI contracts, error format, report JSON schema |
-| [docs/launch-checklist.md](docs/launch-checklist.md) | Pre-release checks |
-| [docs/memory.md](docs/memory.md) | Working log and decisions |
 
 ## Status
 
-Planning stage: these documents are the complete spec, and no code exists yet. Implementation
-proceeds phase by phase per `docs/phases.md`, starting with the deterministic strategy engine.
+In development. `init`, `check` and `mask` work against PostgreSQL and MySQL and are covered by
+unit and integration tests; `pump` and `verify` are not implemented yet.
