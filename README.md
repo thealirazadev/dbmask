@@ -45,6 +45,26 @@ Anyone holding the project secret can confirm guessed real values by dictionary 
 frequencies survive masking. Treat masked copies as confidential and the secret as a credential;
 details in `docs/architecture.md`.
 
+## Quick start
+
+Run it against a restored copy, never against production. `DBMASK_URL` and `DBMASK_SECRET` are
+read from the environment (see `.env.example`); the secret has no CLI flag and must be at least
+32 characters.
+
+```bash
+uv sync
+export DBMASK_URL='postgresql+psycopg://dbmask:dbmask@localhost:54329/dbmask_staging'
+export DBMASK_SECRET='replace-with-32-plus-chars-of-entropy'
+
+uv run dbmask init                         # write a starter dbmask.toml, PII columns flagged
+uv run dbmask check                        # drift and compatibility findings, writes nothing
+uv run dbmask mask --dry-run               # preflight and plan, no row reads or writes
+uv run dbmask mask --report report.json    # mask in place and write the JSON audit report
+```
+
+Review every entry in `dbmask.toml` before the first real `mask`. If a run is interrupted,
+`uv run dbmask mask --resume` continues the newest incomplete run.
+
 ## Stack
 
 - Python 3.12, Click CLI
