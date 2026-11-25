@@ -92,8 +92,27 @@ def test_database_commands_report_not_implemented(
     # verify still reports not implemented
     assert main(["--config", str(write_config(tmp_path)), "verify"]) == EXIT_RUNTIME
     err = capsys.readouterr().err
-    assert err.startswith("error[E_INTERNAL]: verify is not implemented yet")
+    assert err == "error[E_INTERNAL]: verify is not implemented yet\n"
     assert "u:p" not in err
+
+
+def test_pump_reports_not_implemented_without_roadmap_wording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(SECRET_ENV, SECRET)
+    monkeypatch.setenv("DBMASK_SOURCE_URL", "postgresql+psycopg://u:p@localhost:5432/app")
+    monkeypatch.setenv("DBMASK_TARGET_URL", "postgresql+psycopg://u:p@localhost:5432/app_staging")
+    assert main(["--config", str(write_config(tmp_path)), "pump"]) == EXIT_RUNTIME
+    assert capsys.readouterr().err == "error[E_INTERNAL]: pump is not implemented yet\n"
+
+
+def test_mask_help_documents_allow_remasked_as_dangerous(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["mask", "--help"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "--allow-remasked" in out
+    assert "DANGEROUS" in out
 
 
 def test_load_secret_accepts_a_long_enough_secret(monkeypatch: pytest.MonkeyPatch) -> None:

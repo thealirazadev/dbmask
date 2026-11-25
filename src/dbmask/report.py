@@ -1,9 +1,9 @@
 """JSON audit report assembly and writing.
 
-One report per run, containing metadata and outcome. The report is written after
-the run completes (or fails), whether the database write succeeded or verification
-failed. It lives where the operator asked: `--report path.json`. Never contains a
-cell value or a secret: only run IDs, counts, status, and the config hash.
+One report per successful run, containing metadata and outcome. It lives where the
+operator asked: `--report path.json`. A failed run writes no report; its audit row is the
+record. Never contains a cell value or a secret: only run IDs, counts, status, the config
+hash and the secret fingerprint.
 """
 
 from __future__ import annotations
