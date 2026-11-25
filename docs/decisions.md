@@ -120,6 +120,10 @@ taken over the canonicalized plan (sorted JSON of locale, safety, settings, reso
 sorted join pairs), not the file bytes, so reformatting or re-commenting `dbmask.toml` does not
 block a resume while any change to what happens to a column does. On PostgreSQL a batch is one
 `UPDATE ... FROM (VALUES ...)`; on MySQL it is an executemany UPDATE keyed by the primary key.
+When anything fails, the runner rolls back before it marks the run `failed`. Without that
+rollback, MySQL would commit the rows a half-finished batch had already updated, with no progress
+row, so `--resume` would mask them a second time. PostgreSQL would reject the bookkeeping write
+on the aborted transaction and hide the original error.
 All SQL is SQLAlchemy Core with bound parameters and quoted identifiers, and the few raw `text()`
 constructs live only in `dialects.py`.
 
@@ -129,7 +133,13 @@ The whole run holds a session-scoped advisory lock (`pg_try_advisory_lock` on a 
 the database name, or MySQL `GET_LOCK` with a zero timeout). Session scope means the lock survives
 the per-batch commits and dies with the connection if the process does. There is no waiting: a
 second process is refused immediately with `E_SAFETY` and writes nothing, because two runners
-interleaving batches would double-mask rows.
+interleaving batches would double-mask rows. The already-masked and incomplete-run guards are
+checked after the lock is taken, not before: checked first, a second process could pass them,
+wait for the first run to finish and release the lock, then mask the copy again.
+
+`--allow-remasked` skips only the already-masked refusal and exists for test environments that
+mask the same fixture repeatedly. Its help text says it is dangerous; it never skips the
+incomplete-run, resume or lock guards.
 
 ## 10. Dry run reads the schema only, and the runner owns its transactions
 

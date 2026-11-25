@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- `mask --allow-remasked` for test environments, which the refusal message already suggested.
 - An in-place mask runner processes data in batch transactions.
 - An advisory lock and batched update support were added for the database dialects.
 - Audit and progress tables record each run.
@@ -19,6 +20,12 @@
 - Error types map to exit codes.
 
 ### Fixed
+- A failed `mask` run rolls back its open batch before recording the failure, so a half-written
+  batch is never committed and the original error is not hidden.
+- The already-masked and incomplete-run guards are checked while holding the single-runner
+  lock.
+- `pump` and `verify` say "not implemented yet" without roadmap wording.
+- The report, log line and post-run verification docs describe what the code does.
 - `init` no longer anchors the safety pattern to the introspected database.
 - `mask --dry-run` stops before writing, and the report is filled in.
 - Black was upgraded to patch security advisories.

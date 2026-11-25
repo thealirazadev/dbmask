@@ -50,20 +50,19 @@ finding[compat]       users.email          unique index ix_users_email but uniqu
 error[E_DRIFT]: 3 findings (1 pii). fix dbmask.toml and re-run check.
 ```
 
-`mask --dry-run` prints the plan and stops (exit 0): per table, row count, each masked column
-with its strategy, batch count at the configured `batch_size`, then
-`dry run: no data was read or written.`
+`mask --dry-run` runs the preflight findings, prints the tables it would mask in order, then
+`no rows were read or written`, and stops (exit 0).
 
 `mask` progress (stderr, logfmt, one line per event):
 
 ```
-run.started run_id=3f2a... mode=mask db=app_staging tables=6
-mask.table_started table=users rows=182304 batches=37
-mask.batch_committed table=users batch=1/37 rows=5000 elapsed_ms=210
-mask.table_done table=users rows=182304 elapsed_s=8.1
-verify.check_passed check=unique index=ix_users_email
-run.completed run_id=3f2a... rows_masked=214887 elapsed_s=41.2
+mask.started run_id=3f2a...
+mask.batch_done table=users rows_in_batch=5000 rows_total=5000
+mask.table_done table=users rows=182304
+mask.completed run_id=3f2a... rows=214887
 ```
+
+Post-run verification (`verify.*` lines) is designed but not implemented yet.
 
 Failure ends with exactly one stderr line, after any findings:
 `error[E_SAFETY]: database "app_prod" does not match safety.database_name_pattern "_(staging|masked)$"`.
