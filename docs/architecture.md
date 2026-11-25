@@ -1,5 +1,9 @@
 # Architecture - dbmask
 
+Status: `init`, `check` and `mask` are implemented as described here. `pump` (`runner_pump.py`)
+and `verify` (`verify.py`), including post-run verification, are designed below but not built
+yet; their CLI commands exit with a "not implemented yet" error.
+
 ## Tech stack with rationale
 
 - **Python 3.12** - stdlib `tomllib` for config parsing, `hmac`/`hashlib` for the determinism
@@ -233,9 +237,10 @@ impossible.
    b. Compute masked values in memory via the strategy cache.
    c. Write the batch: PostgreSQL `UPDATE ... FROM (VALUES ...)`; MySQL `executemany` UPDATE by
       PK. Same transaction: upsert `dbmask_progress`. Commit.
-6. Finish: set audit row `completed` with `rows_masked` and `finished_at`; run verification
-   (below); write the report if requested. A verification failure sets status `failed` and exits
-   1 even though writes committed, because the copy must not be trusted.
+6. Finish: set audit row `completed` with `rows_masked` and `finished_at`; write the report if
+   requested. On any failure the open batch is rolled back first, then the audit row is set
+   `failed`. Post-run verification (below) is designed but not implemented yet; when it lands, a
+   verification failure will set status `failed` and exit 1 even though writes committed.
 
 ### pump (source -> target)
 

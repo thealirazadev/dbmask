@@ -60,10 +60,8 @@ def _plan(ctx: click.Context) -> MaskPlan:
     return load_plan(ctx.obj)
 
 
-def _not_implemented(command: str, phase: int) -> None:
-    raise DbmaskError(
-        ErrorCode.E_INTERNAL, f"{command} is not implemented yet; it lands in phase {phase}"
-    )
+def _not_implemented(command: str) -> None:
+    raise DbmaskError(ErrorCode.E_INTERNAL, f"{command} is not implemented yet")
 
 
 def read_schema(url: str) -> SchemaModel:
@@ -178,6 +176,12 @@ def _strategy_summary(rules: Sequence[ColumnRule]) -> str:
     default=None,
     help="Write the JSON audit report to this path.",
 )
+@click.option(
+    "--allow-remasked",
+    is_flag=True,
+    help="DANGEROUS, test environments only: mask a database that was already masked. "
+    "Masking masked values does not give the same output as masking the originals.",
+)
 @click.pass_context
 def mask(
     ctx: click.Context,
@@ -185,6 +189,7 @@ def mask(
     dry_run: bool,
     resume: bool,
     report: Path | None,
+    allow_remasked: bool,
 ) -> None:
     """UPDATE rows in place in the database at --url. Destructive by design."""
     plan = _plan(ctx)
@@ -234,6 +239,7 @@ def mask(
                 secret,
                 resume=resume,
                 dry_run=False,
+                allow_remasked=allow_remasked,
             )
 
             click.echo(f"masked {result.rows_masked} rows across {result.tables_done} tables")
@@ -286,7 +292,7 @@ def pump(
     load_secret()
     require_url(source_url, "DBMASK_SOURCE_URL", "--source-url")
     require_url(target_url, "DBMASK_TARGET_URL", "--target-url")
-    _not_implemented("pump", 4)
+    _not_implemented("pump")
 
 
 @cli.command()
@@ -303,7 +309,7 @@ def verify(ctx: click.Context, url: str | None, source_url: str | None) -> None:
     _plan(ctx)
     load_secret()
     require_url(url, "DBMASK_URL", "--url")
-    _not_implemented("verify", 5)
+    _not_implemented("verify")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

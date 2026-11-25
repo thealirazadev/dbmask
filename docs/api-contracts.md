@@ -126,25 +126,28 @@ write.
 
 ```
 $ dbmask mask --url "$DBMASK_URL" --report out/report.json
-run.started run_id=3f2a9c mode=mask db=app_staging tables=6        # stderr, logfmt
-mask.table_started table=users rows=182304 batches=37
-mask.batch_committed table=users batch=1/37 rows=5000 elapsed_ms=210
+mask.started run_id=3f2a9c...                                   # stderr, logfmt
+mask.batch_done table=users rows_in_batch=5000 rows_total=5000
 ...
-verify.check_passed check=fk fk=orders_user_id_fkey
-verify.check_passed check=join pair=users.email~orders.customer_email
-verify.check_passed check=unique index=ix_users_email
-run.completed run_id=3f2a9c rows_masked=214887 elapsed_s=41.2
-masked 214887 rows across 6 tables in 41.2s; report: out/report.json   # stdout summary
+mask.table_done table=users rows=182304
+mask.completed run_id=3f2a9c... rows=214887
+report.written path=out/report.json
+masked 214887 rows across 6 tables                              # stdout summary
 ```
+
+Post-run verification is not implemented yet; see `dbmask verify` below.
 
 | Flag | Meaning |
 |---|---|
 | `--dry-run` | Preflight + plan only; no reads or writes of row data; exit 0 on clean plan. |
 | `--resume` | Continue the newest incomplete run; requires matching config hash and secret fingerprint. |
 | `--report PATH` | Write the JSON audit report. |
-| `--allow-remasked` | Skip the already-masked refusal. Test environments only. |
+| `--allow-remasked` | Skip the already-masked refusal. Test environments only: masking masked values does not reproduce the output of masking the originals. |
 
-Guard failures (all exit 4, all before any write):
+The lock is taken first and every guard below is checked while holding it. A failure partway
+through a batch rolls that batch back before the run is recorded as `failed`.
+
+Guard failures (all exit 4, all before any write; the messages below are paraphrased):
 
 ```
 error[E_SAFETY]: database "app_prod" does not match safety.database_name_pattern "_(staging|masked)$"
@@ -188,6 +191,9 @@ interrupted pump: truncate the target and re-run; the source is untouched by con
 
 ## dbmask verify
 
+Not implemented yet: the command exists and exits 1 with `error[E_INTERNAL]: verify is not
+implemented yet`. The contract below is the design it will follow.
+
 Standalone consistency verification of an already-masked database. Read-only, repeatable.
 
 ```
@@ -217,47 +223,28 @@ unique index covering a masked column (duplicate scan), per-table row counts whe
 
 ## JSON audit report (`--report`)
 
-Written atomically (temp file + rename) after the run and its verification. Schema (stable; new
-optional fields may be added, existing fields never change meaning):
+Written atomically (temp file + rename) after a successful `mask` run; a failed run writes no
+report, and its `dbmask_audit` row (status `failed`) is the record. Schema (stable; new optional
+fields may be added, existing fields never change meaning):
 
 ```json
 {
-  "dbmask_report_version": 1,
-  "run": {
-    "id": "3f2a9c1e-8d5b-4f6a-9c2d-1e8f7a6b5c4d",
-    "mode": "mask",
-    "tool_version": "0.1.0",
-    "config_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-    "locale": "en_US",
-    "database": "app_staging",
-    "dialect": "postgresql",
-    "started_at": "2026-07-27T09:12:03Z",
-    "finished_at": "2026-07-27T09:12:44Z",
-    "status": "completed"
-  },
-  "tables": [
-    {
-      "name": "users",
-      "rows": 182304,
-      "columns": [
-        { "name": "email", "strategy": "fake_email", "unique": true,
-          "masked": 182290, "nulls_passed": 14, "cache_hit_rate": 0.31 },
-        { "name": "full_name", "strategy": "fake_name",
-          "masked": 182304, "nulls_passed": 0, "cache_hit_rate": 0.08 }
-      ]
-    }
-  ],
-  "verification": {
-    "status": "passed",
-    "checks": [
-      { "check": "fk", "name": "orders_user_id_fkey", "orphans": 0, "passed": true },
-      { "check": "join", "name": "users.email~orders.customer_email", "orphans": 0, "passed": true },
-      { "check": "unique", "name": "ix_users_email", "duplicates": 0, "passed": true }
-    ]
-  },
-  "warnings": []
+  "run_id": "3f2a9c1e-8d5b-4f6a-9c2d-1e8f7a6b5c4d",
+  "mode": "mask",
+  "status": "completed",
+  "tool_version": "0.1.0",
+  "config_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "secret_fingerprint": "1a2b3c4d5e6f",
+  "locale": "en_US",
+  "rows_masked": 214887,
+  "started_at": "2026-07-27T09:12:03",
+  "finished_at": "2026-07-27T09:12:44",
+  "verification_failed": null
 }
 ```
+
+Timestamps are naive UTC. Per-table and per-column counts and post-run verification results
+are planned additions; `verification_failed` stays `null` until verification exists.
 
 Guarantees: counts and metadata only; no sample values, no PK values, no secret material beyond
 `config_hash` (which hashes the config file, not the secret). `keep` columns are listed with

@@ -6,8 +6,11 @@ mid-batch leaves the batch uncommitted and the progress unchanged, so the next `
 re-masks the same batch identically. Crash between batches leaves the progress committed,
 so resume skips to the next batch.
 
-The advisory lock and all guards (completed run, incomplete run without --resume, config
-hash and secret fingerprint match on resume) are checked before any data is read.
+The advisory lock is taken first, and all guards (completed run, incomplete run without
+--resume, config hash and secret fingerprint match on resume) are checked while holding it
+and before any data is read, so a second process cannot pass them while the first one runs.
+A failed run rolls back its open batch before it records the failure, so a half-written
+batch is never committed.
 """
 
 from __future__ import annotations
@@ -52,8 +55,8 @@ class MaskResult:
 
 
 def _preflight_guards(connection: Connection, plan: MaskPlan, allow_remasked: bool) -> None:
-    """Check that the database is safe to mask: no completed run, no incomplete run without
-    resume."""
+    """Check that the database is safe to mask: no completed run (unless `allow_remasked`,
+    for test environments), no incomplete run without resume."""
     if completed_run(connection) is not None:
         if not allow_remasked:
             raise DbmaskError(
@@ -210,6 +213,7 @@ def mask_plan(
     resume: bool = False,
     dry_run: bool = False,
     batch_size: int | None = None,
+    allow_remasked: bool = False,
 ) -> MaskResult:
     """Execute the mask plan. Returns the run ID and row count.
 
@@ -226,23 +230,22 @@ def mask_plan(
         # Just return a dummy result; actual plan printing happens in CLI
         return MaskResult(run_id="", rows_masked=0, tables_done=0)
 
-    # Create audit tables if needed
-    ensure_tables(connection)
-    connection.commit()
+    # Single-runner lock first: the guards below read the audit table, and a second
+    # process must not be able to pass them while this one is between check and insert.
+    with advisory_lock(connection, schema.database):
+        # Create audit tables if needed
+        ensure_tables(connection)
+        connection.commit()
 
-    # Preflight guards
-    if not resume:
-        _preflight_guards(connection, plan, allow_remasked=False)
-    else:
-        # Resume requires incomplete run to exist
-        if incomplete_run(connection) is None:
+        # Preflight guards
+        if not resume:
+            _preflight_guards(connection, plan, allow_remasked=allow_remasked)
+        elif incomplete_run(connection) is None:
             raise DbmaskError(
                 ErrorCode.E_SAFETY,
                 "no incomplete run to resume",
             )
 
-    # Single-runner lock
-    with advisory_lock(connection, schema.database):
         # Import __version__ here to get the tool version
         from . import __version__
 
@@ -284,6 +287,10 @@ def mask_plan(
                 tables_done=tables_done,
             )
         except Exception as exc:
+            # Discard the open batch first. Committing here without a rollback would commit
+            # a half-written batch without its progress row (MySQL), or fail on the aborted
+            # transaction and hide the original error (PostgreSQL).
+            connection.rollback()
             # Mark the run as failed
             finish_run(connection, run_id, STATUS_FAILED, 0)
             connection.commit()

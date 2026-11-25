@@ -30,8 +30,9 @@ verification.
 - `dbmask init`: introspects the schema and writes a starter config with PII columns pre-flagged.
 - `dbmask check`: drift and compatibility findings (key columns, length budgets, unique indexes,
   declared join pairs) before anything is written.
-- Safety guards: database-name pattern check before connecting, already-masked detection,
-  single-runner lock, secret only via environment variable.
+- Safety guards: database-name pattern check before connecting, already-masked detection
+  (`--allow-remasked` overrides it, test environments only), single-runner lock, secret only via
+  environment variable.
 - JSON audit report of the run (counts, config hash, secret fingerprint, never sample values) and
   a `--dry-run` that checks the plan without touching data.
 
