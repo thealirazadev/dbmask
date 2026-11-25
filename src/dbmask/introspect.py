@@ -6,7 +6,7 @@ path, which is the one thing this tool exists to avoid.
 
 The patterns err toward false positives on purpose (`file_name` matches `name`). The cost
 of a false positive is one explicit `keep` in the config; the cost of a false negative is
-unmasked PII in staging. Never narrow a pattern to reduce noise (docs/rules.md).
+unmasked PII in staging, so a pattern is never narrowed just to reduce noise.
 """
 
 from __future__ import annotations

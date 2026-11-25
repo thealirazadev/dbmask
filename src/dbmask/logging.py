@@ -2,7 +2,7 @@
 
 One line per event: the dotted event name, then key=value fields. Fields are
 identifiers, counts and durations only. No cell value, masked or real, and no secret
-ever reaches this module (docs/rules.md, value-hygiene rule). Database URLs are only
+ever reaches this module, because stderr often ends up in CI logs. Database URLs are only
 ever logged through scrub_url, which replaces the password with ***.
 """
 

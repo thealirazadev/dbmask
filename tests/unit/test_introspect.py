@@ -37,7 +37,7 @@ PII_CASES = [
     ("full_name", "name"),
     ("surname", "name"),
     # Deliberate false positive: the tool cannot tell a person's name from a file's, so
-    # it flags both. The cost is one explicit keep in review (docs/rules.md).
+    # it flags both. The cost is one explicit keep in review.
     ("file_name", "name"),
 ]
 

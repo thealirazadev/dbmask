@@ -298,7 +298,7 @@ impossible.
 6. **Key stability**: PK/FK columns are `keep` by validation, so referential integrity cannot be
    broken by masking; logical (non-FK) joins survive via determinism and are verified.
 7. **Value hygiene**: no cell value, masked or real, is ever passed to the logger, an exception
-   message, the report, or the audit tables. Enforced by review rule (`docs/rules.md`) and by an
+   message, the report, or the audit tables. Enforced in review (see `docs/decisions.md`) and by an
    integration test that greps all captured output for seeded sentinel values.
 8. **Idempotent verify**: verification is read-only and can run any number of times.
 

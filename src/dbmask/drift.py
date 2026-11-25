@@ -4,7 +4,8 @@ This module is the whole of `check` and the preflight of every run, so a clean r
 here is the promise that a run will get past its own preflight on the same schema.
 
 Findings carry identifiers, constraint names and counts only. No cell value reaches a
-finding message, and neither does the secret (docs/rules.md, value-hygiene rule).
+finding message, and neither does the secret: findings are printed and logged, and that
+output often ends up in CI logs.
 """
 
 from __future__ import annotations
