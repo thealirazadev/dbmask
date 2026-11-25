@@ -74,6 +74,11 @@ def test_scrub_password_leaves_text_alone_when_the_url_carries_no_password() -> 
     )
 
 
+def test_scrub_password_leaves_text_alone_when_the_url_does_not_parse() -> None:
+    url = "postgresql+psycopg://app:s3cr3t@[db.internal:5432/app"
+    assert scrub_password("connect failed", url) == "connect failed"
+
+
 def test_log_event_writes_one_logfmt_line(capsys: pytest.CaptureFixture[str]) -> None:
     log_event("mask.batch_committed", table="users", batch="1/37", rows=5000, elapsed_ms=210.5)
     err = capsys.readouterr().err
